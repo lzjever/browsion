@@ -36,7 +36,7 @@ pub fn run() {
             // Start background task to cleanup dead processes
             let app_handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
-                let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(10));
+                let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(2));
                 loop {
                     interval.tick().await;
                     if let Some(state) = app_handle.try_state::<AppState>() {
@@ -74,6 +74,7 @@ pub fn run() {
             commands::update_chrome_path,
             commands::get_settings,
             commands::update_settings,
+            commands::get_recent_profiles,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

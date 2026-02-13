@@ -13,6 +13,7 @@ export const ProfileList: React.FC<ProfileListProps> = ({ onEditProfile, onClone
   const [runningStatus, setRunningStatus] = useState<RunningStatus>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [tagFilter, setTagFilter] = useState('');
 
   const loadProfiles = async () => {
     try {
@@ -35,7 +36,7 @@ export const ProfileList: React.FC<ProfileListProps> = ({ onEditProfile, onClone
   useEffect(() => {
     loadProfiles();
 
-    // Refresh status every 5 seconds
+    // Refresh status every 2 seconds
     const interval = setInterval(async () => {
       try {
         const status = await tauriApi.getRunningProfiles();
@@ -43,7 +44,7 @@ export const ProfileList: React.FC<ProfileListProps> = ({ onEditProfile, onClone
       } catch (err) {
         console.error('Failed to refresh status:', err);
       }
-    }, 5000);
+    }, 2000);
 
     return () => clearInterval(interval);
   }, []);
@@ -107,21 +108,47 @@ export const ProfileList: React.FC<ProfileListProps> = ({ onEditProfile, onClone
     );
   }
 
+  // Filter profiles by tags
+  const filteredProfiles = profiles.filter((profile) => {
+    if (!tagFilter.trim()) return true;
+    const keywords = tagFilter.trim().toLowerCase().split(/\s+/);
+    return keywords.some((kw) =>
+      (profile.tags || []).some((tag) => tag.toLowerCase().includes(kw))
+    );
+  });
+
   return (
-    <div className="profile-list">
-      {profiles.map((profile) => (
-        <ProfileItem
-          key={profile.id}
-          profile={profile}
-          isRunning={runningStatus[profile.id] || false}
-          onLaunch={handleLaunch}
-          onActivate={handleActivate}
-          onKill={handleKill}
-          onEdit={onEditProfile}
-          onClone={onCloneProfile}
-          onDelete={handleDelete}
+    <>
+      <div className="profile-filter">
+        <input
+          type="text"
+          className="filter-input"
+          placeholder="Filter by tags (e.g., work testing)"
+          value={tagFilter}
+          onChange={(e) => setTagFilter(e.target.value)}
         />
-      ))}
-    </div>
+      </div>
+      <div className="profile-list">
+        {filteredProfiles.length === 0 ? (
+          <div className="empty-state">
+            <p>No profiles match your filter.</p>
+          </div>
+        ) : (
+          filteredProfiles.map((profile) => (
+            <ProfileItem
+              key={profile.id}
+              profile={profile}
+              isRunning={runningStatus[profile.id] || false}
+              onLaunch={handleLaunch}
+              onActivate={handleActivate}
+              onKill={handleKill}
+              onEdit={onEditProfile}
+              onClone={onCloneProfile}
+              onDelete={handleDelete}
+            />
+          ))
+        )}
+      </div>
+    </>
   );
 };

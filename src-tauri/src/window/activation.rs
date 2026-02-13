@@ -62,9 +62,9 @@ fn activate_window_windows(pid: u32) -> Result<()> {
 
         // Restore and bring to foreground
         ShowWindow(target_hwnd, SW_RESTORE);
-        SetForegroundWindow(target_hwnd)
-            .ok()
-            .map_err(|e| BrowsionError::Window(format!("Failed to set foreground window: {:?}", e)))?;
+        SetForegroundWindow(target_hwnd).ok().map_err(|e| {
+            BrowsionError::Window(format!("Failed to set foreground window: {:?}", e))
+        })?;
 
         tracing::info!("Activated window for PID {}", pid);
         Ok(())
@@ -103,7 +103,7 @@ fn activate_window_macos(pid: u32) -> Result<()> {
 fn activate_window_linux(pid: u32) -> Result<()> {
     // Try xdotool first (works best with PID)
     let result = std::process::Command::new("xdotool")
-        .args(&[
+        .args([
             "search",
             "--pid",
             &format!("{}", pid),
@@ -131,7 +131,7 @@ fn activate_window_linux(pid: u32) -> Result<()> {
     // Fallback: Try wmctrl with window listing and PID matching
     // First, list all windows and find the one with our PID
     let list_result = std::process::Command::new("wmctrl")
-        .args(&["-l", "-p"])
+        .args(["-l", "-p"])
         .output();
 
     if let Ok(list_output) = list_result {
@@ -146,7 +146,7 @@ fn activate_window_linux(pid: u32) -> Result<()> {
                             // Found the window! Try to activate by window ID
                             let window_id = parts[0];
                             let activate_result = std::process::Command::new("wmctrl")
-                                .args(&["-i", "-a", window_id])
+                                .args(["-i", "-a", window_id])
                                 .output();
 
                             if let Ok(activate_output) = activate_result {
@@ -171,13 +171,4 @@ fn activate_window_linux(pid: u32) -> Result<()> {
         "Failed to activate window for PID {}. Please install xdotool (recommended) or wmctrl.",
         pid
     )))
-}
-
-#[cfg(all(target_os = "linux", feature = "x11"))]
-fn activate_window_x11(pid: u32) -> Result<()> {
-    // This is a placeholder for X11 direct implementation
-    // Would require x11-rs crate
-    Err(BrowsionError::Window(
-        "X11 direct activation not yet implemented".to_string(),
-    ))
 }

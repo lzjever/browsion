@@ -1,4 +1,4 @@
-use crate::config::{validation, AppConfig, BrowserProfile};
+use crate::config::{validation, BrowserProfile};
 use crate::state::AppState;
 use crate::window;
 use std::collections::HashMap;
@@ -21,16 +21,32 @@ pub async fn get_chrome_path(state: State<'_, AppState>) -> Result<String, Strin
 
 /// Launch a profile
 #[tauri::command]
-pub async fn launch_profile(
-    profile_id: String,
-    state: State<'_, AppState>,
-) -> Result<u32, String> {
+pub async fn launch_profile(profile_id: String, state: State<'_, AppState>) -> Result<u32, String> {
     let config = state.config.read().clone();
-    state
+    let pid = state
         .process_manager
         .launch_profile(&profile_id, &config)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+
+    // Update recent profiles in config
+    {
+        let mut config = state.config.write();
+        // Remove if already exists
+        config.recent_profiles.retain(|id| id != &profile_id);
+        // Add to front
+        config.recent_profiles.insert(0, profile_id.clone());
+        // Keep only last 10
+        if config.recent_profiles.len() > 10 {
+            config.recent_profiles.truncate(10);
+        }
+        // Save to disk
+        if let Err(e) = crate::config::save_config(&config) {
+            tracing::warn!("Failed to save recent profiles: {}", e);
+        }
+    }
+
+    Ok(pid)
 }
 
 /// Activate (focus) a running profile's window
@@ -116,10 +132,7 @@ pub async fn update_profile(
 
 /// Delete a profile
 #[tauri::command]
-pub async fn delete_profile(
-    profile_id: String,
-    state: State<'_, AppState>,
-) -> Result<(), String> {
+pub async fn delete_profile(profile_id: String, state: State<'_, AppState>) -> Result<(), String> {
     // Check if profile is running
     if state.process_manager.is_running(&profile_id) {
         return Err(format!(
@@ -161,7 +174,9 @@ pub async fn update_chrome_path(path: String, state: State<'_, AppState>) -> Res
 
 /// Get application settings
 #[tauri::command]
-pub async fn get_settings(state: State<'_, AppState>) -> Result<crate::config::AppSettings, String> {
+pub async fn get_settings(
+    state: State<'_, AppState>,
+) -> Result<crate::config::AppSettings, String> {
     let config = state.config.read();
     Ok(config.settings.clone())
 }
@@ -179,4 +194,22 @@ pub async fn update_settings(
     crate::config::save_config(&config).map_err(|e| e.to_string())?;
 
     Ok(())
+}
+
+/// Get recently launched profiles
+#[tauri::command]
+pub async fn get_recent_profiles(
+    state: State<'_, AppState>,
+) -> Result<Vec<BrowserProfile>, String> {
+    let recent_ids = state.process_manager.get_recent_launches();
+    let config = state.config.read();
+
+    let mut recent_profiles = Vec::new();
+    for profile_id in recent_ids {
+        if let Some(profile) = config.profiles.iter().find(|p| p.id == profile_id) {
+            recent_profiles.push(profile.clone());
+        }
+    }
+
+    Ok(recent_profiles)
 }

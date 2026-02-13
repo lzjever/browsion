@@ -9,6 +9,7 @@ export interface BrowserProfile {
   fingerprint?: string;
   color?: string;
   custom_args: string[];
+  tags: string[];
 }
 
 export interface AppConfig {

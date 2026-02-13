@@ -36,6 +36,18 @@ export const ProfileItem: React.FC<ProfileItemProps> = ({
             <span className="detail">Lang: {profile.lang}</span>
             {profile.timezone && <span className="detail">TZ: {profile.timezone}</span>}
             {profile.fingerprint && <span className="detail">FP: {profile.fingerprint}</span>}
+            {profile.tags && profile.tags.length > 0 && (
+              <>
+                {profile.tags.slice(0, 3).map((tag) => (
+                  <span key={tag} className="profile-tag">
+                    {tag}
+                  </span>
+                ))}
+                {profile.tags.length > 3 && (
+                  <span className="profile-tag">+{profile.tags.length - 3}</span>
+                )}
+              </>
+            )}
           </div>
         </div>
         <div className="profile-status">

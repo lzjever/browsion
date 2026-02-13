@@ -2,6 +2,84 @@ import React, { useState, useEffect } from 'react';
 import { tauriApi } from '../api/tauri';
 import type { BrowserProfile } from '../types/profile';
 import { v4 as uuidv4 } from 'uuid';
+import ISO6391 from 'iso-639-1';
+
+// Get all IANA timezones from browser's Intl API
+const getAllTimezones = (): string[] => {
+  try {
+    // Modern browsers support this (Chrome 99+, Firefox 93+, Safari 15.4+)
+    // @ts-ignore
+    return Intl.supportedValuesOf('timeZone') as string[];
+  } catch {
+    // Fallback: common timezones
+    return [
+      'UTC',
+      'America/New_York', 'America/Chicago', 'America/Denver', 'America/Los_Angeles',
+      'Europe/London', 'Europe/Paris', 'Europe/Berlin',
+      'Asia/Shanghai', 'Asia/Tokyo', 'Asia/Seoul', 'Asia/Singapore',
+      'Australia/Sydney',
+    ];
+  }
+};
+
+// Generate locale list from ISO-639-1 + common country codes
+const getAllLocales = (): { code: string; name: string }[] => {
+  // Common country codes for locale variants
+  const countryMap: Record<string, string[]> = {
+    'en': ['US', 'GB', 'AU', 'CA', 'NZ', 'IE', 'ZA'],
+    'zh': ['CN', 'TW', 'HK', 'SG'],
+    'es': ['ES', 'MX', 'AR', 'CO', 'CL'],
+    'pt': ['PT', 'BR'],
+    'fr': ['FR', 'CA', 'BE', 'CH'],
+    'de': ['DE', 'AT', 'CH'],
+    'ar': ['SA', 'AE', 'EG', 'MA'],
+  };
+
+  // Try to use Intl.DisplayNames for localized names
+  let displayNames: Intl.DisplayNames | null = null;
+  try {
+    displayNames = new Intl.DisplayNames(['en'], { type: 'language' });
+  } catch {
+    // Not supported, will use ISO6391 names
+  }
+
+  const locales: { code: string; name: string }[] = [];
+
+  // Add locale variants (e.g., en-US, zh-CN)
+  for (const [lang, countries] of Object.entries(countryMap)) {
+    for (const country of countries) {
+      const locale = `${lang}-${country}`;
+      let name: string;
+      try {
+        name = displayNames?.of(locale) || ISO6391.getName(lang) || locale;
+      } catch {
+        name = ISO6391.getName(lang) || locale;
+      }
+      locales.push({ code: locale, name });
+    }
+  }
+
+  // Add base language codes (e.g., ja, ko, th)
+  const baseLanguages = ['ja', 'ko', 'th', 'vi', 'id', 'ms', 'fil', 'hi', 'tr', 'nl',
+    'pl', 'uk', 'cs', 'sv', 'da', 'no', 'fi', 'el', 'he', 'hu', 'ro', 'bg', 'hr',
+    'sk', 'sl', 'et', 'lv', 'lt', 'mt', 'cy', 'eu', 'ca', 'gl', 'hy', 'ka',
+    'bn', 'ta', 'te', 'ml', 'kn', 'mr', 'gu', 'pa', 'ur', 'fa', 'ps', 'ku'];
+
+  for (const code of baseLanguages) {
+    const name = displayNames?.of(code) || ISO6391.getName(code) || code;
+    if (ISO6391.getName(code) || displayNames?.of(code)) {
+      locales.push({ code, name });
+    }
+  }
+
+  // Sort by name
+  locales.sort((a, b) => a.name.localeCompare(b.name));
+  return locales;
+};
+
+// Memoized lists
+const TIMEZONES = getAllTimezones();
+const LANGUAGES = getAllLocales();
 
 interface ProfileFormProps {
   profile?: BrowserProfile;
@@ -25,8 +103,10 @@ export const ProfileForm: React.FC<ProfileFormProps> = ({
     fingerprint: '',
     color: '#3498DB',
     custom_args: [],
+    tags: [],
   });
   const [customArgsText, setCustomArgsText] = useState('');
+  const [tagsText, setTagsText] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -36,6 +116,7 @@ export const ProfileForm: React.FC<ProfileFormProps> = ({
       const profileData = profile.id ? profile : { ...profile, id: uuidv4() };
       setFormData(profileData);
       setCustomArgsText(profile.custom_args.join('\n'));
+      setTagsText((profile.tags || []).join(', '));
     } else {
       setFormData((prev) => ({ ...prev, id: uuidv4() }));
     }
@@ -53,6 +134,12 @@ export const ProfileForm: React.FC<ProfileFormProps> = ({
         .map((line) => line.trim())
         .filter((line) => line.length > 0);
 
+      // Parse tags
+      const tags = tagsText
+        .split(/[,\s]+/)
+        .map((t) => t.trim())
+        .filter((t) => t.length > 0);
+
       const profileData: BrowserProfile = {
         ...formData,
         proxy_server: formData.proxy_server || undefined,
@@ -60,6 +147,7 @@ export const ProfileForm: React.FC<ProfileFormProps> = ({
         fingerprint: formData.fingerprint || undefined,
         color: formData.color || undefined,
         custom_args,
+        tags,
       };
 
       // If original profile has no ID or is a clone, treat as new
@@ -87,133 +175,166 @@ export const ProfileForm: React.FC<ProfileFormProps> = ({
 
   return (
     <div className="modal-overlay">
-      <div className="modal-content">
-        <h2>{profile ? 'Edit Profile' : 'Add Profile'}</h2>
+      <div className="modal-content modal-with-footer">
+        <div className="modal-header">
+          <h2>{profile ? 'Edit Profile' : 'Add Profile'}</h2>
+          {error && <div className="error-message">{error}</div>}
+        </div>
 
-        {error && <div className="error-message">{error}</div>}
-
-        <form onSubmit={handleSubmit}>
-          <div className="form-group">
-            <label htmlFor="name">Name *</label>
-            <input
-              type="text"
-              id="name"
-              name="name"
-              value={formData.name}
-              onChange={handleChange}
-              required
-              placeholder="Profile 10000"
-            />
-          </div>
-
-          <div className="form-group">
-            <label htmlFor="description">Description</label>
-            <input
-              type="text"
-              id="description"
-              name="description"
-              value={formData.description}
-              onChange={handleChange}
-              placeholder="US Proxy Profile"
-            />
-          </div>
-
-          <div className="form-group">
-            <label htmlFor="user_data_dir">User Data Directory *</label>
-            <input
-              type="text"
-              id="user_data_dir"
-              name="user_data_dir"
-              value={formData.user_data_dir}
-              onChange={handleChange}
-              required
-              placeholder="/home/percy/google_profile/10000"
-            />
-          </div>
-
-          <div className="form-row">
+        <div className="modal-body">
+          <form onSubmit={handleSubmit} id="profile-form">
             <div className="form-group">
-              <label htmlFor="lang">Language</label>
+              <label htmlFor="name">Name *</label>
               <input
                 type="text"
-                id="lang"
-                name="lang"
-                value={formData.lang}
+                id="name"
+                name="name"
+                value={formData.name}
                 onChange={handleChange}
-                placeholder="en-US"
+                required
+                placeholder="Profile 10000"
               />
             </div>
 
             <div className="form-group">
-              <label htmlFor="color">Color</label>
-              <input
-                type="color"
-                id="color"
-                name="color"
-                value={formData.color}
-                onChange={handleChange}
-              />
-            </div>
-          </div>
-
-          <div className="form-group">
-            <label htmlFor="proxy_server">Proxy Server</label>
-            <input
-              type="text"
-              id="proxy_server"
-              name="proxy_server"
-              value={formData.proxy_server}
-              onChange={handleChange}
-              placeholder="http://192.168.0.220:8889"
-            />
-          </div>
-
-          <div className="form-row">
-            <div className="form-group">
-              <label htmlFor="timezone">Timezone</label>
+              <label htmlFor="description">Description</label>
               <input
                 type="text"
-                id="timezone"
-                name="timezone"
-                value={formData.timezone}
+                id="description"
+                name="description"
+                value={formData.description}
                 onChange={handleChange}
-                placeholder="America/Los_Angeles"
+                placeholder="US Proxy Profile"
               />
             </div>
 
             <div className="form-group">
-              <label htmlFor="fingerprint">Fingerprint</label>
+              <label htmlFor="tags">Tags (comma or space separated)</label>
               <input
                 type="text"
-                id="fingerprint"
-                name="fingerprint"
-                value={formData.fingerprint}
-                onChange={handleChange}
-                placeholder="10000"
+                id="tags"
+                value={tagsText}
+                onChange={(e) => setTagsText(e.target.value)}
+                placeholder="work, us-proxy, testing"
               />
             </div>
-          </div>
 
-          <div className="form-group">
-            <label htmlFor="custom_args">Custom Arguments (one per line)</label>
-            <textarea
-              id="custom_args"
-              value={customArgsText}
-              onChange={(e) => setCustomArgsText(e.target.value)}
-              placeholder="--disable-gpu&#10;--no-sandbox"
-              rows={4}
-            />
-          </div>
+            <div className="form-group">
+              <label htmlFor="user_data_dir">User Data Directory *</label>
+              <input
+                type="text"
+                id="user_data_dir"
+                name="user_data_dir"
+                value={formData.user_data_dir}
+                onChange={handleChange}
+                required
+                placeholder="/home/percy/google_profile/10000"
+              />
+            </div>
 
-          <div className="form-actions">
-            <button type="button" className="btn btn-secondary" onClick={onCancel}>
-              Cancel
-            </button>
-            <button type="submit" className="btn btn-primary" disabled={loading}>
-              {loading ? 'Saving...' : 'Save'}
-            </button>
-          </div>
-        </form>
+            <div className="form-row">
+              <div className="form-group">
+                <label htmlFor="lang">Language</label>
+                <input
+                  type="text"
+                  id="lang"
+                  name="lang"
+                  value={formData.lang}
+                  onChange={handleChange}
+                  list="lang-list"
+                  placeholder="en-US"
+                />
+                <datalist id="lang-list">
+                  {LANGUAGES.map((lang) => (
+                    <option key={lang.code} value={lang.code}>
+                      {lang.name}
+                    </option>
+                  ))}
+                </datalist>
+              </div>
+
+              <div className="form-group">
+                <label htmlFor="color">Color</label>
+                <input
+                  type="color"
+                  id="color"
+                  name="color"
+                  value={formData.color}
+                  onChange={handleChange}
+                />
+              </div>
+            </div>
+
+            <div className="form-group">
+              <label htmlFor="proxy_server">Proxy Server</label>
+              <input
+                type="text"
+                id="proxy_server"
+                name="proxy_server"
+                value={formData.proxy_server}
+                onChange={handleChange}
+                placeholder="http://192.168.0.220:8889"
+              />
+            </div>
+
+            <div className="form-row">
+              <div className="form-group">
+                <label htmlFor="timezone">Timezone</label>
+                <input
+                  type="text"
+                  id="timezone"
+                  name="timezone"
+                  value={formData.timezone || ''}
+                  onChange={handleChange}
+                  list="timezone-list"
+                  placeholder="America/Los_Angeles"
+                />
+                <datalist id="timezone-list">
+                  {TIMEZONES.map((tz) => (
+                    <option key={tz} value={tz} />
+                  ))}
+                </datalist>
+              </div>
+
+              <div className="form-group">
+                <label htmlFor="fingerprint">Fingerprint</label>
+                <input
+                  type="text"
+                  id="fingerprint"
+                  name="fingerprint"
+                  value={formData.fingerprint}
+                  onChange={handleChange}
+                  placeholder="10000"
+                />
+              </div>
+            </div>
+
+            <div className="form-group">
+              <label htmlFor="custom_args">Custom Arguments (one per line)</label>
+              <textarea
+                id="custom_args"
+                value={customArgsText}
+                onChange={(e) => setCustomArgsText(e.target.value)}
+                placeholder="--disable-gpu&#10;--no-sandbox"
+                rows={4}
+              />
+            </div>
+          </form>
+        </div>
+
+        <div className="modal-footer">
+          <button type="button" className="btn btn-secondary" onClick={onCancel}>
+            Cancel
+          </button>
+          <button
+            type="submit"
+            form="profile-form"
+            className="btn btn-primary"
+            disabled={loading}
+          >
+            {loading ? 'Saving...' : 'Save'}
+          </button>
+        </div>
       </div>
     </div>
   );

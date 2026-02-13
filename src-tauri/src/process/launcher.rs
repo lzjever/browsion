@@ -71,6 +71,7 @@ mod tests {
             fingerprint: None,
             color: None,
             custom_args: vec![],
+            tags: vec![],
         };
 
         let cmd = build_command(Path::new("/usr/bin/google-chrome"), &profile);
@@ -96,6 +97,7 @@ mod tests {
             fingerprint: Some("10000".to_string()),
             color: None,
             custom_args: vec!["--disable-gpu".to_string()],
+            tags: vec![],
         };
 
         let cmd = build_command(Path::new("/usr/bin/google-chrome"), &profile);

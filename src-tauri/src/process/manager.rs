@@ -1,17 +1,19 @@
-use crate::config::schema::{AppConfig, BrowserProfile, ProcessInfo};
+use crate::config::schema::{AppConfig, ProcessInfo};
 use crate::error::{BrowsionError, Result};
 use crate::process::launcher;
 use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
-use sysinfo::{System, Pid, ProcessRefreshKind};
+use sysinfo::{Pid, ProcessRefreshKind, System};
 
 pub struct ProcessManager {
     /// Map of profile_id -> ProcessInfo
     active_processes: Arc<Mutex<HashMap<String, ProcessInfo>>>,
     /// System info for process tracking
     system: Arc<Mutex<System>>,
+    /// Recently launched profiles (most recent first)
+    recent_launches: Arc<Mutex<Vec<String>>>,
 }
 
 impl ProcessManager {
@@ -19,6 +21,7 @@ impl ProcessManager {
         Self {
             active_processes: Arc::new(Mutex::new(HashMap::new())),
             system: Arc::new(Mutex::new(System::new_all())),
+            recent_launches: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -45,15 +48,11 @@ impl ProcessManager {
         // Build and execute command
         let mut cmd = launcher::build_command(&config.chrome_path, profile);
 
-        tracing::info!(
-            "Launching profile {} with command: {:?}",
-            profile_id,
-            cmd
-        );
+        tracing::info!("Launching profile {} with command: {:?}", profile_id, cmd);
 
-        let child = cmd.spawn().map_err(|e| {
-            BrowsionError::Process(format!("Failed to launch Chrome: {}", e))
-        })?;
+        let child = cmd
+            .spawn()
+            .map_err(|e| BrowsionError::Process(format!("Failed to launch Chrome: {}", e)))?;
 
         let pid = child.id();
         let now = SystemTime::now()
@@ -71,6 +70,19 @@ impl ProcessManager {
         self.active_processes
             .lock()
             .insert(profile_id.to_string(), process_info);
+
+        // Update recent launches
+        {
+            let mut recent = self.recent_launches.lock();
+            // Remove if already exists
+            recent.retain(|id| id != profile_id);
+            // Add to front
+            recent.insert(0, profile_id.to_string());
+            // Keep only last 10
+            if recent.len() > 10 {
+                recent.truncate(10);
+            }
+        }
 
         tracing::info!("Launched profile {} with PID {}", profile_id, pid);
 
@@ -121,14 +133,24 @@ impl ProcessManager {
     pub fn is_running(&self, profile_id: &str) -> bool {
         let processes = self.active_processes.lock();
         if let Some(info) = processes.get(profile_id) {
-            // Verify the process actually exists
+            // Verify the process actually exists and is a Chrome process
             let pid = Pid::from_u32(info.pid);
             let mut system = self.system.lock();
             system.refresh_processes_specifics(
                 sysinfo::ProcessesToUpdate::Some(&[pid]),
                 ProcessRefreshKind::new(),
             );
-            system.process(pid).is_some()
+
+            if let Some(process) = system.process(pid) {
+                // Check if it's actually a Chrome/Chromium process and not a zombie
+                let name = process.name().to_string_lossy().to_lowercase();
+                let is_chrome = name.contains("chrome") || name.contains("chromium");
+                let is_zombie = process.status() == sysinfo::ProcessStatus::Zombie;
+
+                is_chrome && !is_zombie
+            } else {
+                false
+            }
         } else {
             false
         }
@@ -155,12 +177,40 @@ impl ProcessManager {
                     ProcessRefreshKind::new(),
                 );
 
-                if system.process(pid).is_none() {
+                let should_remove = if let Some(process) = system.process(pid) {
+                    // Check if it's still a Chrome/Chromium process and not a zombie
+                    let name = process.name().to_string_lossy().to_lowercase();
+                    let is_chrome = name.contains("chrome") || name.contains("chromium");
+                    let is_zombie = process.status() == sysinfo::ProcessStatus::Zombie;
+
+                    if !is_chrome {
+                        tracing::info!(
+                            "Process {} for profile {} is no longer Chrome (name: {}), removing",
+                            info.pid,
+                            profile_id,
+                            name
+                        );
+                        true
+                    } else if is_zombie {
+                        tracing::info!(
+                            "Process {} for profile {} is a zombie, removing",
+                            info.pid,
+                            profile_id
+                        );
+                        true
+                    } else {
+                        false
+                    }
+                } else {
                     tracing::info!(
                         "Process {} for profile {} is dead, removing",
                         info.pid,
                         profile_id
                     );
+                    true
+                };
+
+                if should_remove {
                     to_remove.push(profile_id.clone());
                 }
             }
@@ -180,6 +230,12 @@ impl ProcessManager {
     pub fn get_running_profiles(&self) -> Vec<String> {
         let processes = self.active_processes.lock();
         processes.keys().cloned().collect()
+    }
+
+    /// Get recently launched profile IDs (most recent first)
+    pub fn get_recent_launches(&self) -> Vec<String> {
+        let recent = self.recent_launches.lock();
+        recent.clone()
     }
 }
 

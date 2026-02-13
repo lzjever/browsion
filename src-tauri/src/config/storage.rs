@@ -66,7 +66,10 @@ pub fn save_config(config: &AppConfig) -> Result<()> {
     let content = toml::to_string_pretty(config)?;
 
     fs::write(&config_path, content).map_err(|e| {
-        BrowsionError::Config(format!("Failed to write config to {:?}: {}", config_path, e))
+        BrowsionError::Config(format!(
+            "Failed to write config to {:?}: {}",
+            config_path, e
+        ))
     })?;
 
     tracing::info!("Saved config to {:?}", config_path);

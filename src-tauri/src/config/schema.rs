@@ -13,6 +13,10 @@ pub struct AppConfig {
     /// Application settings
     #[serde(default)]
     pub settings: AppSettings,
+
+    /// Recently launched profile IDs (most recent first)
+    #[serde(default)]
+    pub recent_profiles: Vec<String>,
 }
 
 impl Default for AppConfig {
@@ -21,6 +25,7 @@ impl Default for AppConfig {
             chrome_path: Self::default_chrome_path(),
             profiles: Vec::new(),
             settings: AppSettings::default(),
+            recent_profiles: Vec::new(),
         }
     }
 }
@@ -81,6 +86,10 @@ pub struct BrowserProfile {
     /// Custom launch arguments
     #[serde(default)]
     pub custom_args: Vec<String>,
+
+    /// Tags for categorization and filtering
+    #[serde(default)]
+    pub tags: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

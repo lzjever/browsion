@@ -113,6 +113,7 @@ mod tests {
             fingerprint: Some("12345".to_string()),
             color: Some("#FF5733".to_string()),
             custom_args: vec![],
+            tags: vec![],
         };
 
         assert!(validate_profile(&profile).is_ok());
@@ -120,7 +121,7 @@ mod tests {
 
     #[test]
     fn test_validate_empty_id() {
-        let mut profile = BrowserProfile {
+        let profile = BrowserProfile {
             id: "".to_string(),
             name: "Test".to_string(),
             description: "".to_string(),
@@ -131,6 +132,7 @@ mod tests {
             fingerprint: None,
             color: None,
             custom_args: vec![],
+            tags: vec![],
         };
 
         assert!(validate_profile(&profile).is_err());
@@ -149,6 +151,7 @@ mod tests {
             fingerprint: None,
             color: None,
             custom_args: vec![],
+            tags: vec![],
         };
 
         assert!(validate_profile(&profile).is_err());
@@ -167,6 +170,7 @@ mod tests {
             fingerprint: None,
             color: Some("red".to_string()),
             custom_args: vec![],
+            tags: vec![],
         };
 
         assert!(validate_profile(&profile).is_err());
