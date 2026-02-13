@@ -1,0 +1,48 @@
+[package]
+name = "browsion"
+version = "0.1.0"
+description = "Cross-platform browser launcher for managing Chrome profiles"
+authors = ["you"]
+edition = "2021"
+
+[lib]
+name = "browsion_lib"
+crate-type = ["lib", "cdylib", "staticlib"]
+
+[[bin]]
+name = "browsion"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-shell = "2"
+tauri-plugin-dialog = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+tokio = { version = "1", features = ["full"] }
+sysinfo = "0.31"
+thiserror = "1.0"
+dirs = "5.0"
+parking_lot = "0.12"
+tracing = "0.1"
+tracing-subscriber = "0.3"
+uuid = { version = "1", features = ["v4", "serde"] }
+
+# Platform-specific dependencies
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.58", features = [
+    "Win32_Foundation",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_System_Threading",
+] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+cocoa = "0.26"
+objc = "0.2"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

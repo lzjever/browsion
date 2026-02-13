@@ -1,0 +1,85 @@
+import React from 'react';
+import type { BrowserProfile } from '../types/profile';
+
+interface ProfileItemProps {
+  profile: BrowserProfile;
+  isRunning: boolean;
+  onLaunch: (id: string) => void;
+  onActivate: (id: string) => void;
+  onKill: (id: string) => void;
+  onEdit: (profile: BrowserProfile) => void;
+  onClone: (profile: BrowserProfile) => void;
+  onDelete: (id: string) => void;
+}
+
+export const ProfileItem: React.FC<ProfileItemProps> = ({
+  profile,
+  isRunning,
+  onLaunch,
+  onActivate,
+  onKill,
+  onEdit,
+  onClone,
+  onDelete,
+}) => {
+  return (
+    <div className="profile-item">
+      <div className="profile-header">
+        <div
+          className="profile-color"
+          style={{ backgroundColor: profile.color || '#666' }}
+        />
+        <div className="profile-info">
+          <h3>{profile.name}</h3>
+          {profile.description && <p className="description">{profile.description}</p>}
+          <div className="profile-details">
+            <span className="detail">Lang: {profile.lang}</span>
+            {profile.timezone && <span className="detail">TZ: {profile.timezone}</span>}
+            {profile.fingerprint && <span className="detail">FP: {profile.fingerprint}</span>}
+          </div>
+        </div>
+        <div className="profile-status">
+          <span className={`status-indicator ${isRunning ? 'running' : 'stopped'}`}>
+            {isRunning ? '● Running' : '○ Stopped'}
+          </span>
+        </div>
+      </div>
+
+      <div className="profile-actions">
+        {!isRunning ? (
+          <button className="btn btn-primary" onClick={() => onLaunch(profile.id)}>
+            Launch
+          </button>
+        ) : (
+          <>
+            <button className="btn btn-success" onClick={() => onActivate(profile.id)}>
+              Activate
+            </button>
+            <button className="btn btn-danger" onClick={() => onKill(profile.id)}>
+              Kill
+            </button>
+          </>
+        )}
+        <button className="btn btn-secondary" onClick={() => onEdit(profile)}>
+          Edit
+        </button>
+        <button className="btn btn-info" onClick={() => onClone(profile)}>
+          Clone
+        </button>
+        <button
+          className="btn btn-danger-outline"
+          onClick={() => onDelete(profile.id)}
+          disabled={isRunning}
+        >
+          Delete
+        </button>
+      </div>
+
+      {profile.proxy_server && (
+        <div className="profile-footer">
+          <small>Proxy: {profile.proxy_server}</small>
+        </div>
+      )}
+    </div>
+  );
+};

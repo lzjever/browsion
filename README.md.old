@@ -1,0 +1,165 @@
+# Browsion - Cross-Platform Browser Launcher
+
+A cross-platform application for managing and launching multiple Chrome browser profiles with custom configurations.
+
+## Features
+
+- **System Tray Integration**: Runs in the background with system tray icon
+- **Profile Management**: Create, edit, and delete browser profiles
+- **Process Tracking**: Launch, activate, and kill browser instances
+- **Advanced Configuration**:
+  - Custom user data directories
+  - Proxy server settings
+  - Language and timezone configuration
+  - Fingerprint support
+  - Custom Chrome launch arguments
+- **Cross-Platform**: Works on Windows, macOS, and Linux
+
+## Technology Stack
+
+- **Backend**: Rust with Tauri v2
+- **Frontend**: React + TypeScript
+- **Build Tool**: Vite
+- **Configuration**: TOML
+
+## Prerequisites
+
+- [Rust](https://rustup.rs/) (latest stable)
+- [Node.js](https://nodejs.org/) (v18 or later)
+- [pnpm](https://pnpm.io/) or npm
+
+### Linux Additional Requirements
+
+For window activation on Linux, install one of these tools:
+```bash
+# Ubuntu/Debian
+sudo apt install wmctrl
+
+# or
+sudo apt install xdotool
+
+# Arch Linux
+sudo pacman -S wmctrl
+# or
+sudo pacman -S xdotool
+```
+
+## Development Setup
+
+1. Clone the repository:
+```bash
+cd browsion
+```
+
+2. Install dependencies:
+```bash
+npm install
+```
+
+3. Run in development mode:
+```bash
+npm run tauri dev
+```
+
+## Building
+
+Build for production:
+
+```bash
+npm run tauri build
+```
+
+The built application will be in `src-tauri/target/release/bundle/`.
+
+## Configuration
+
+Configuration file is stored at:
+- **Linux**: `~/.config/browsion/config.toml`
+- **macOS**: `~/Library/Application Support/com.browsion.app/config.toml`
+- **Windows**: `%APPDATA%\browsion\config.toml`
+
+### Example Configuration
+
+```toml
+chrome_path = "/usr/bin/google-chrome"
+
+[settings]
+auto_start = false
+minimize_to_tray = true
+
+[[profiles]]
+id = "uuid-1234-5678"
+name = "Profile 10000"
+description = "US Proxy Profile"
+user_data_dir = "/home/percy/google_profile/10000"
+proxy_server = "http://192.168.0.220:8889"
+lang = "en-US"
+timezone = "America/Los_Angeles"
+fingerprint = "10000"
+color = "#FF5733"
+custom_args = []
+```
+
+## Usage
+
+1. **First Launch**: Configure the Chrome executable path in Settings
+2. **Add Profile**: Click "Add Profile" and fill in the configuration
+3. **Launch**: Click the "Launch" button to start a browser instance
+4. **Activate**: Click "Activate" to focus an already running browser
+5. **Kill**: Click "Kill" to terminate a running browser instance
+6. **System Tray**: Click the tray icon to show/hide the window
+
+## Icons
+
+Before building for production, you should replace the placeholder icons in `src-tauri/icons/` with proper application icons:
+
+- `icon.png` (512x512 or higher, source image)
+- `32x32.png`, `128x128.png`, `128x128@2x.png` (various sizes)
+- `icon.icns` (macOS)
+- `icon.ico` (Windows)
+
+You can use online tools like [icon.kitchen](https://icon.kitchen/) to generate these.
+
+## Project Structure
+
+```
+browsion/
+├── src/                    # React frontend
+│   ├── components/         # React components
+│   ├── api/                # Tauri API wrapper
+│   ├── types/              # TypeScript types
+│   └── styles/             # CSS styles
+├── src-tauri/              # Rust backend
+│   ├── src/
+│   │   ├── config/         # Configuration management
+│   │   ├── process/        # Process management
+│   │   ├── window/         # Window activation
+│   │   ├── tray/           # System tray
+│   │   └── commands/       # Tauri commands
+│   └── icons/              # Application icons
+└── dist/                   # Build output (generated)
+```
+
+## Troubleshooting
+
+### Chrome doesn't launch
+- Check that the Chrome path is correct in Settings
+- Verify Chrome is installed and executable
+- Check the application logs for error messages
+
+### Window activation doesn't work (Linux)
+- Install `wmctrl` or `xdotool`
+- Some window managers may require additional configuration
+
+### Build fails
+- Ensure all Rust dependencies are installed
+- Run `cargo clean` and try again
+- Check Rust version: `rustc --version` (should be 1.70+)
+
+## License
+
+[Your License Here]
+
+## Contributing
+
+Contributions are welcome! Please open an issue or submit a pull request.
