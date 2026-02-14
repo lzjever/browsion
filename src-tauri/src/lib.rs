@@ -1,8 +1,10 @@
+pub mod agent;
 pub mod commands;
 pub mod config;
 pub mod error;
 pub mod process;
 pub mod state;
+pub mod templates;
 pub mod tray;
 pub mod window;
 
@@ -26,6 +28,9 @@ pub fn run() {
 
             // Create application state
             let state = AppState::new(config);
+
+            // Set app handle on agent engine for event emission
+            state.agent_engine.set_app_handle(app.handle().clone());
 
             // Manage state
             app.manage(state);
@@ -75,6 +80,24 @@ pub fn run() {
             commands::get_settings,
             commands::update_settings,
             commands::get_recent_profiles,
+            commands::run_agent,
+            commands::stop_agent,
+            commands::pause_agent,
+            commands::resume_agent,
+            commands::get_agent_status,
+            commands::get_ai_config,
+            commands::update_ai_config,
+            commands::test_ai_provider,
+            commands::get_templates,
+            commands::get_template,
+            commands::save_template,
+            commands::delete_template,
+            commands::open_templates_dir,
+            commands::get_scheduled_tasks,
+            commands::add_scheduled_task,
+            commands::update_scheduled_task,
+            commands::delete_scheduled_task,
+            commands::toggle_scheduled_task,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

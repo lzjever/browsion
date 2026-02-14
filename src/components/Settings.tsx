@@ -2,8 +2,12 @@ import React, { useState, useEffect } from 'react';
 import { tauriApi } from '../api/tauri';
 import type { AppSettings } from '../types/profile';
 import { open } from '@tauri-apps/plugin-dialog';
+import { AISettings } from './AISettings';
+
+type SettingsTab = 'general' | 'ai';
 
 export const Settings: React.FC = () => {
+  const [activeTab, setActiveTab] = useState<SettingsTab>('general');
   const [chromePath, setChromePath] = useState('');
   const [settings, setSettings] = useState<AppSettings>({
     auto_start: false,
@@ -92,65 +96,90 @@ export const Settings: React.FC = () => {
     <div className="settings-container">
       <h2>Settings</h2>
 
-      {error && <div className="error-message">{error}</div>}
-      {success && <div className="success-message">{success}</div>}
-
-      <div className="settings-section">
-        <h3>Chrome Configuration</h3>
-
-        <div className="form-group">
-          <label htmlFor="chrome-path">Chrome Executable Path</label>
-          <div className="input-with-button">
-            <input
-              type="text"
-              id="chrome-path"
-              value={chromePath}
-              onChange={(e) => setChromePath(e.target.value)}
-              placeholder="/usr/bin/google-chrome"
-            />
-            <button className="btn btn-secondary" onClick={handleBrowseChrome}>
-              Browse
-            </button>
-          </div>
-        </div>
-
+      {/* Tab Navigation */}
+      <div className="settings-tabs">
         <button
-          className="btn btn-primary"
-          onClick={handleSaveChromePath}
-          disabled={saving}
+          className={`tab-btn ${activeTab === 'general' ? 'active' : ''}`}
+          onClick={() => setActiveTab('general')}
         >
-          {saving ? 'Saving...' : 'Save Chrome Path'}
+          General
+        </button>
+        <button
+          className={`tab-btn ${activeTab === 'ai' ? 'active' : ''}`}
+          onClick={() => setActiveTab('ai')}
+        >
+          AI Configuration
         </button>
       </div>
 
-      <div className="settings-section">
-        <h3>Application Settings</h3>
+      {error && <div className="error-message">{error}</div>}
+      {success && <div className="success-message">{success}</div>}
 
-        <div className="checkbox-group">
-          <label>
-            <input
-              type="checkbox"
-              checked={settings.auto_start}
-              onChange={(e) =>
-                handleSettingsChange('auto_start', e.target.checked)
-              }
-            />
-            <span>Auto-start on system boot</span>
-          </label>
-        </div>
+      {/* Tab Content */}
+      <div className="settings-content">
+        {activeTab === 'general' && (
+          <>
+            <div className="settings-section">
+              <h3>Chrome Configuration</h3>
 
-        <div className="checkbox-group">
-          <label>
-            <input
-              type="checkbox"
-              checked={settings.minimize_to_tray}
-              onChange={(e) =>
-                handleSettingsChange('minimize_to_tray', e.target.checked)
-              }
-            />
-            <span>Minimize to tray when closing window</span>
-          </label>
-        </div>
+              <div className="form-group">
+                <label htmlFor="chrome-path">Chrome Executable Path</label>
+                <div className="input-with-button">
+                  <input
+                    type="text"
+                    id="chrome-path"
+                    value={chromePath}
+                    onChange={(e) => setChromePath(e.target.value)}
+                    placeholder="/usr/bin/google-chrome"
+                  />
+                  <button className="btn btn-secondary" onClick={handleBrowseChrome}>
+                    Browse
+                  </button>
+                </div>
+              </div>
+
+              <button
+                className="btn btn-primary"
+                onClick={handleSaveChromePath}
+                disabled={saving}
+              >
+                {saving ? 'Saving...' : 'Save Chrome Path'}
+              </button>
+            </div>
+
+            <div className="settings-section">
+              <h3>Application Settings</h3>
+
+              <div className="checkbox-group">
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={settings.auto_start}
+                    onChange={(e) =>
+                      handleSettingsChange('auto_start', e.target.checked)
+                    }
+                  />
+                  <span>Auto-start on system boot</span>
+                </label>
+              </div>
+
+              <div className="checkbox-group">
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={settings.minimize_to_tray}
+                    onChange={(e) =>
+                      handleSettingsChange('minimize_to_tray', e.target.checked)
+                    }
+                  />
+                  <span>Minimize to tray when closing window</span>
+                </label>
+              </div>
+            </div>
+          </>
+        )}
+
+        {activeTab === 'ai' && <AISettings />}
       </div>
     </div>
   );

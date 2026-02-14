@@ -2,6 +2,30 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.1] - 2026-02-14
+
+### Fixed
+
+#### CDP Connection
+- Fix CDP client connecting to wrong WebSocket (browser vs page target)
+- Fix `Page.navigate` and other commands returning "not found" errors
+- Fix browser not executing actions despite LLM decisions
+
+#### AI Agent
+- Fix stop/pause buttons not working (event listener dependency issue)
+- Fix agentId not being set from progress events
+
+### Changed
+
+#### CDP Port
+- Use dynamic CDP port allocation (9222+) to support multiple concurrent agents
+
+#### Process Management
+- Ensure Chrome process is always closed when agent exits (even on errors)
+
+#### Message History
+- Limit LLM message history to 30 messages to avoid token limits and memory growth
+
 ## [0.2.0] - 2026-02-14
 
 ### Added
