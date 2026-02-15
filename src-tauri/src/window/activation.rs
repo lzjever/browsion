@@ -76,7 +76,7 @@ fn activate_window_macos(pid: u32) -> Result<()> {
     use cocoa::appkit::NSRunningApplication;
     use cocoa::base::nil;
     use cocoa::foundation::NSInteger;
-    use objc::{msg_send, sel, sel_impl};
+    use objc::{class, msg_send, sel, sel_impl};
 
     unsafe {
         let app: *mut objc::runtime::Object = msg_send![
