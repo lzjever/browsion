@@ -27,7 +27,7 @@ fn activate_window_windows(pid: u32) -> Result<()> {
     };
 
     unsafe {
-        let mut target_hwnd: HWND = HWND(0);
+        let mut target_hwnd: HWND = HWND(std::ptr::null_mut());
         let pid_to_find = pid;
 
         // Callback to find window by PID
@@ -53,7 +53,7 @@ fn activate_window_windows(pid: u32) -> Result<()> {
             LPARAM(&mut target_hwnd as *mut HWND as isize),
         );
 
-        if target_hwnd.0 == 0 {
+        if target_hwnd.0.is_null() {
             return Err(BrowsionError::Window(format!(
                 "No window found for PID {}",
                 pid
