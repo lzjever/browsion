@@ -2,6 +2,31 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.3] - 2026-02-19
+
+### Added
+
+#### Profile Dialog UX/UI Improvements
+- New two-column layout for Profile Form dialog (wider 1000px modal)
+- Large textarea for Description/Notes field (supports JSON, account info, etc.)
+- **LaunchArgsSelector component**: Preset checkboxes for common Chromium arguments
+  - Performance: `--disable-gpu`, `--disable-dev-shm-usage`, `--disable-software-rasterizer`
+  - Security: `--no-sandbox`, `--disable-web-security`, `--ignore-certificate-errors`
+  - Window: `--start-maximized`, `--start-fullscreen`
+  - Network: `--disable-background-networking`, `--disable-extensions`
+  - Automation: `--disable-infobars`, `--disable-blink-features=AutomationControlled`
+- Custom Arguments textarea for additional flags
+
+### Changed
+
+#### CDP Launcher
+- Removed default `--disable-gpu` argument in headless mode (user can now opt-in via preset)
+
+#### Profile Form Layout
+- Left column: Name, User Data Dir, Tags, Language, Color, Proxy, Timezone, Fingerprint
+- Right column: Description (large textarea), Launch Arguments Presets, Custom Arguments
+- Responsive design: single column on screens < 768px
+
 ## [0.2.1] - 2026-02-14
 
 ### Fixed

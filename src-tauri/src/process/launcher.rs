@@ -25,10 +25,9 @@ pub fn build_command(chrome_path: &Path, profile: &BrowserProfile) -> Command {
     // Language
     cmd.arg(format!("--lang={}", profile.lang));
 
-    // Timezone (Chrome doesn't have a native --timezone flag, but some extensions use it)
-    // We'll pass it as a custom argument for extensions or future Chrome features
+    // Timezone (for fingerprint-chromium)
     if let Some(tz) = &profile.timezone {
-        cmd.arg(format!("--tz={}", tz));
+        cmd.arg(format!("--timezone={}", tz));
     }
 
     // Custom arguments
@@ -108,7 +107,7 @@ mod tests {
 
         assert!(args.contains(&"--proxy-server=http://192.168.0.220:8889".to_string()));
         assert!(args.contains(&"--fingerprint=10000".to_string()));
-        assert!(args.contains(&"--tz=America/Los_Angeles".to_string()));
+        assert!(args.contains(&"--timezone=America/Los_Angeles".to_string()));
         assert!(args.contains(&"--disable-gpu".to_string()));
     }
 }

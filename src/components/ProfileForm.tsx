@@ -3,6 +3,7 @@ import { tauriApi } from '../api/tauri';
 import type { BrowserProfile } from '../types/profile';
 import { v4 as uuidv4 } from 'uuid';
 import ISO6391 from 'iso-639-1';
+import { LaunchArgsSelector, ARG_CATEGORIES } from './LaunchArgsSelector';
 
 // Get all IANA timezones from browser's Intl API
 const getAllTimezones = (): string[] => {
@@ -105,17 +106,44 @@ export const ProfileForm: React.FC<ProfileFormProps> = ({
     custom_args: [],
     tags: [],
   });
-  const [customArgsText, setCustomArgsText] = useState('');
   const [tagsText, setTagsText] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Parse custom_args into preset args (matching our selector) and additional args
+  const getPresetArgs = (): string[] => {
+    return formData.custom_args.filter((arg) =>
+      ARG_CATEGORIES.some((cat) => cat.args.some((a) => a.arg === arg))
+    );
+  };
+
+  const getAdditionalArgs = (): string => {
+    const presetArgs = new Set(
+      ARG_CATEGORIES.flatMap((cat) => cat.args.map((a) => a.arg))
+    );
+    return formData.custom_args
+      .filter((arg) => !presetArgs.has(arg))
+      .join('\n');
+  };
+
+  const handlePresetArgsChange = (selectedPresetArgs: string[]) => {
+    const presetArgsSet = new Set(
+      ARG_CATEGORIES.flatMap((cat) => cat.args.map((a) => a.arg))
+    );
+    const additionalArgs = formData.custom_args.filter(
+      (arg) => !presetArgsSet.has(arg)
+    );
+    setFormData((prev) => ({
+      ...prev,
+      custom_args: [...selectedPresetArgs, ...additionalArgs],
+    }));
+  };
 
   useEffect(() => {
     if (profile) {
       // If ID is empty, this is a clone operation, generate new ID
       const profileData = profile.id ? profile : { ...profile, id: uuidv4() };
       setFormData(profileData);
-      setCustomArgsText(profile.custom_args.join('\n'));
       setTagsText((profile.tags || []).join(', '));
     } else {
       setFormData((prev) => ({ ...prev, id: uuidv4() }));
@@ -128,12 +156,6 @@ export const ProfileForm: React.FC<ProfileFormProps> = ({
     setError(null);
 
     try {
-      // Parse custom args
-      const custom_args = customArgsText
-        .split('\n')
-        .map((line) => line.trim())
-        .filter((line) => line.length > 0);
-
       // Parse tags
       const tags = tagsText
         .split(/[,\s]+/)
@@ -146,7 +168,6 @@ export const ProfileForm: React.FC<ProfileFormProps> = ({
         timezone: formData.timezone || undefined,
         fingerprint: formData.fingerprint || undefined,
         color: formData.color || undefined,
-        custom_args,
         tags,
       };
 
@@ -175,7 +196,7 @@ export const ProfileForm: React.FC<ProfileFormProps> = ({
 
   return (
     <div className="modal-overlay">
-      <div className="modal-content modal-with-footer">
+      <div className="modal-content modal-with-footer profile-form-wide">
         <div className="modal-header">
           <h2>{profile ? 'Edit Profile' : 'Add Profile'}</h2>
           {error && <div className="error-message">{error}</div>}
@@ -183,141 +204,168 @@ export const ProfileForm: React.FC<ProfileFormProps> = ({
 
         <div className="modal-body">
           <form onSubmit={handleSubmit} id="profile-form">
-            <div className="form-group">
-              <label htmlFor="name">Name *</label>
-              <input
-                type="text"
-                id="name"
-                name="name"
-                value={formData.name}
-                onChange={handleChange}
-                required
-                placeholder="Profile 10000"
-              />
-            </div>
+            <div className="profile-form-grid">
+              {/* Left Column - Basic Info */}
+              <div className="profile-form-column">
+                <div className="form-group">
+                  <label htmlFor="name">Name *</label>
+                  <input
+                    type="text"
+                    id="name"
+                    name="name"
+                    value={formData.name}
+                    onChange={handleChange}
+                    required
+                    placeholder="Profile 10000"
+                  />
+                </div>
 
-            <div className="form-group">
-              <label htmlFor="description">Description</label>
-              <input
-                type="text"
-                id="description"
-                name="description"
-                value={formData.description}
-                onChange={handleChange}
-                placeholder="US Proxy Profile"
-              />
-            </div>
+                <div className="form-group">
+                  <label htmlFor="user_data_dir">User Data Directory *</label>
+                  <input
+                    type="text"
+                    id="user_data_dir"
+                    name="user_data_dir"
+                    value={formData.user_data_dir}
+                    onChange={handleChange}
+                    required
+                    placeholder="/home/percy/google_profile/10000"
+                  />
+                </div>
 
-            <div className="form-group">
-              <label htmlFor="tags">Tags (comma or space separated)</label>
-              <input
-                type="text"
-                id="tags"
-                value={tagsText}
-                onChange={(e) => setTagsText(e.target.value)}
-                placeholder="work, us-proxy, testing"
-              />
-            </div>
+                <div className="form-group">
+                  <label htmlFor="tags">Tags (comma or space separated)</label>
+                  <input
+                    type="text"
+                    id="tags"
+                    value={tagsText}
+                    onChange={(e) => setTagsText(e.target.value)}
+                    placeholder="work, us-proxy, testing"
+                  />
+                </div>
 
-            <div className="form-group">
-              <label htmlFor="user_data_dir">User Data Directory *</label>
-              <input
-                type="text"
-                id="user_data_dir"
-                name="user_data_dir"
-                value={formData.user_data_dir}
-                onChange={handleChange}
-                required
-                placeholder="/home/percy/google_profile/10000"
-              />
-            </div>
+                <div className="form-row">
+                  <div className="form-group">
+                    <label htmlFor="lang">Language</label>
+                    <input
+                      type="text"
+                      id="lang"
+                      name="lang"
+                      value={formData.lang}
+                      onChange={handleChange}
+                      list="lang-list"
+                      placeholder="en-US"
+                    />
+                    <datalist id="lang-list">
+                      {LANGUAGES.map((lang) => (
+                        <option key={lang.code} value={lang.code}>
+                          {lang.name}
+                        </option>
+                      ))}
+                    </datalist>
+                  </div>
 
-            <div className="form-row">
-              <div className="form-group">
-                <label htmlFor="lang">Language</label>
-                <input
-                  type="text"
-                  id="lang"
-                  name="lang"
-                  value={formData.lang}
-                  onChange={handleChange}
-                  list="lang-list"
-                  placeholder="en-US"
-                />
-                <datalist id="lang-list">
-                  {LANGUAGES.map((lang) => (
-                    <option key={lang.code} value={lang.code}>
-                      {lang.name}
-                    </option>
-                  ))}
-                </datalist>
+                  <div className="form-group">
+                    <label htmlFor="color">Color</label>
+                    <input
+                      type="color"
+                      id="color"
+                      name="color"
+                      value={formData.color}
+                      onChange={handleChange}
+                    />
+                  </div>
+                </div>
+
+                <div className="form-group">
+                  <label htmlFor="proxy_server">Proxy Server</label>
+                  <input
+                    type="text"
+                    id="proxy_server"
+                    name="proxy_server"
+                    value={formData.proxy_server}
+                    onChange={handleChange}
+                    placeholder="http://192.168.0.220:8889"
+                  />
+                </div>
+
+                <div className="form-row">
+                  <div className="form-group">
+                    <label htmlFor="timezone">Timezone</label>
+                    <input
+                      type="text"
+                      id="timezone"
+                      name="timezone"
+                      value={formData.timezone || ''}
+                      onChange={handleChange}
+                      list="timezone-list"
+                      placeholder="America/Los_Angeles"
+                    />
+                    <datalist id="timezone-list">
+                      {TIMEZONES.map((tz) => (
+                        <option key={tz} value={tz} />
+                      ))}
+                    </datalist>
+                  </div>
+
+                  <div className="form-group">
+                    <label htmlFor="fingerprint">Fingerprint</label>
+                    <input
+                      type="text"
+                      id="fingerprint"
+                      name="fingerprint"
+                      value={formData.fingerprint}
+                      onChange={handleChange}
+                      placeholder="10000"
+                    />
+                  </div>
+                </div>
               </div>
 
-              <div className="form-group">
-                <label htmlFor="color">Color</label>
-                <input
-                  type="color"
-                  id="color"
-                  name="color"
-                  value={formData.color}
-                  onChange={handleChange}
-                />
+              {/* Right Column - Notes & Args */}
+              <div className="profile-form-column">
+                <div className="form-group">
+                  <label htmlFor="description">Description / Notes</label>
+                  <textarea
+                    id="description"
+                    name="description"
+                    value={formData.description}
+                    onChange={handleChange}
+                    placeholder="Store JSON configs, account info, notes..."
+                    rows={10}
+                    className="description-textarea"
+                  />
+                </div>
+
+                <div className="form-group">
+                  <label>Launch Arguments Presets</label>
+                  <LaunchArgsSelector
+                    selectedArgs={getPresetArgs()}
+                    onArgsChange={handlePresetArgsChange}
+                  />
+                </div>
+
+                <div className="form-group">
+                  <label htmlFor="custom_args">Custom Arguments (one per line)</label>
+                  <textarea
+                    id="custom_args"
+                    value={getAdditionalArgs()}
+                    onChange={(e) => {
+                      const additionalArgs = e.target.value
+                        .split('\n')
+                        .map((line) => line.trim())
+                        .filter((line) => line.length > 0);
+                      const presetArgs = getPresetArgs();
+                      setFormData((prev) => ({
+                        ...prev,
+                        custom_args: [...presetArgs, ...additionalArgs],
+                      }));
+                    }}
+                    placeholder="--custom-arg=value&#10;--another-flag"
+                    rows={3}
+                  />
+                </div>
               </div>
-            </div>
-
-            <div className="form-group">
-              <label htmlFor="proxy_server">Proxy Server</label>
-              <input
-                type="text"
-                id="proxy_server"
-                name="proxy_server"
-                value={formData.proxy_server}
-                onChange={handleChange}
-                placeholder="http://192.168.0.220:8889"
-              />
-            </div>
-
-            <div className="form-row">
-              <div className="form-group">
-                <label htmlFor="timezone">Timezone</label>
-                <input
-                  type="text"
-                  id="timezone"
-                  name="timezone"
-                  value={formData.timezone || ''}
-                  onChange={handleChange}
-                  list="timezone-list"
-                  placeholder="America/Los_Angeles"
-                />
-                <datalist id="timezone-list">
-                  {TIMEZONES.map((tz) => (
-                    <option key={tz} value={tz} />
-                  ))}
-                </datalist>
-              </div>
-
-              <div className="form-group">
-                <label htmlFor="fingerprint">Fingerprint</label>
-                <input
-                  type="text"
-                  id="fingerprint"
-                  name="fingerprint"
-                  value={formData.fingerprint}
-                  onChange={handleChange}
-                  placeholder="10000"
-                />
-              </div>
-            </div>
-
-            <div className="form-group">
-              <label htmlFor="custom_args">Custom Arguments (one per line)</label>
-              <textarea
-                id="custom_args"
-                value={customArgsText}
-                onChange={(e) => setCustomArgsText(e.target.value)}
-                placeholder="--disable-gpu&#10;--no-sandbox"
-                rows={4}
-              />
             </div>
           </form>
         </div>

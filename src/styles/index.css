@@ -1346,3 +1346,100 @@ body {
   color: #e74c3c;
   border: 1px solid rgba(231, 76, 60, 0.3);
 }
+
+/* ==================== Profile Form Wide Layout ==================== */
+.modal-content.profile-form-wide {
+  max-width: 1000px;
+  width: 95%;
+}
+
+.profile-form-grid {
+  display: grid;
+  grid-template-columns: 1fr 1.2fr;
+  gap: 1.5rem;
+}
+
+.profile-form-column {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+/* Description large textarea */
+.description-textarea {
+  min-height: 180px;
+  font-family: 'Consolas', 'Monaco', monospace;
+  font-size: 0.875rem;
+  resize: vertical;
+  line-height: 1.4;
+}
+
+/* Launch args selector */
+.launch-args-selector {
+  background: var(--light-bg);
+  border-radius: 6px;
+  padding: 0.75rem;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.args-category {
+  margin-bottom: 0.75rem;
+}
+
+.args-category:last-child {
+  margin-bottom: 0;
+}
+
+.args-category-header {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text-light);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 0.5rem;
+  padding-bottom: 0.25rem;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.arg-item {
+  display: flex;
+  align-items: flex-start;
+  padding: 0.25rem 0;
+  cursor: pointer;
+}
+
+.arg-item input[type="checkbox"] {
+  margin-right: 0.5rem;
+  margin-top: 0.125rem;
+  flex-shrink: 0;
+}
+
+.arg-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.arg-name {
+  font-family: 'Consolas', 'Monaco', monospace;
+  font-size: 0.8125rem;
+  color: var(--dark-bg);
+}
+
+.arg-desc {
+  font-size: 0.75rem;
+  color: var(--text-light);
+  margin-top: 0.125rem;
+}
+
+/* Responsive: single column on small screens */
+@media (max-width: 768px) {
+  .profile-form-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .modal-content.profile-form-wide {
+    max-width: 95%;
+    width: 95%;
+  }
+}

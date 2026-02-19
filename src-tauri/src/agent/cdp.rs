@@ -129,7 +129,6 @@ impl CDPClient {
         // Headless mode
         if headless {
             cmd.arg("--headless=new");
-            cmd.arg("--disable-gpu");
         }
 
         // Disable some features that might interfere
@@ -151,9 +150,9 @@ impl CDPClient {
             cmd.arg(format!("--fingerprint={}", fp));
         }
 
-        // Timezone
+        // Timezone (for fingerprint-chromium)
         if let Some(tz) = &profile.timezone {
-            cmd.arg(format!("--tz={}", tz));
+            cmd.arg(format!("--timezone={}", tz));
         }
 
         // Custom arguments
