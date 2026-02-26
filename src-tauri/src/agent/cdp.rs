@@ -9,10 +9,23 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio_tungstenite::{connect_async, tungstenite::Message as WsMessage};
 
+/// Per-tab state saved/restored on tab switch.
+#[derive(Default, Clone)]
+struct TabState {
+    /// Flatten-mode CDP session ID for this tab. Empty string = not yet attached.
+    session_id: String,
+    /// Current URL of this tab.
+    url: String,
+    /// AX ref cache: ref_id ("e1"…) → backend_node_id
+    ax_ref_cache: HashMap<String, i64>,
+    /// Count of in-flight network requests
+    inflight_requests: u32,
+}
+
 /// CDP Client using raw WebSocket for better Chrome compatibility
 #[allow(clippy::type_complexity)]
 pub struct CDPClient {
-    /// WebSocket sender
+    /// Browser-level WebSocket sender (single connection for all tabs)
     ws_tx: Option<
         Arc<
             Mutex<
@@ -25,21 +38,35 @@ pub struct CDPClient {
             >,
         >,
     >,
-    /// Response receiver (command id → one-shot sender)
-    responses: Arc<Mutex<HashMap<u32, tokio::sync::oneshot::Sender<serde_json::Value>>>>,
-    /// CDP event listeners (method name → list of one-shot senders)
-    events: Arc<Mutex<HashMap<String, Vec<tokio::sync::oneshot::Sender<serde_json::Value>>>>>,
-    /// AX ref cache: "e1" → backend_node_id. Cleared on navigation.
+    /// Command response routing: (session_id, msg_id) → sender
+    /// session_id="" for browser-level commands (Target domain)
+    responses: Arc<Mutex<HashMap<(String, u32), tokio::sync::oneshot::Sender<serde_json::Value>>>>,
+    /// Event routing: (session_id, method) → one-shot senders
+    /// session_id="" for browser-level events (Target.*)
+    events: Arc<Mutex<HashMap<(String, String), Vec<tokio::sync::oneshot::Sender<serde_json::Value>>>>>,
+    /// Tab registry: target_id → TabState
+    tab_registry: Arc<Mutex<HashMap<String, TabState>>>,
+    /// Currently active target_id (which tab CDP commands go to)
+    active_target_id: Arc<Mutex<String>>,
+    /// AX ref cache for the active tab (synced from/to tab_registry on switch)
     ax_ref_cache: Arc<Mutex<HashMap<String, i64>>>,
-    /// Persistent network request log (max 200 entries). Filled by WS reader.
+    /// Persistent network request log (max 500 entries, all tabs combined)
     network_log: Arc<Mutex<VecDeque<serde_json::Value>>>,
-    /// Inflight network requests count (for networkidle detection)
+    /// Inflight network requests for the active tab
     inflight_requests: Arc<Mutex<u32>>,
-    /// Chrome process ID
+    /// Persistent console log (max 500 entries, all tabs combined)
+    console_log: Arc<Mutex<VecDeque<serde_json::Value>>>,
+    /// Network intercept rules (Fetch domain)
+    intercept_rules: Arc<Mutex<Vec<crate::agent::types::InterceptRule>>>,
+    /// Frame execution contexts: frame_id → context_id
+    frame_contexts: Arc<Mutex<HashMap<String, i64>>>,
+    /// Currently active frame_id (None = main frame)
+    active_frame_id: Arc<Mutex<Option<String>>>,
+    /// Chrome process ID (owned launches only)
     chrome_pid: Option<u32>,
     /// Profile being used
     profile_id: String,
-    /// Current URL
+    /// Current URL of active tab
     current_url: Arc<Mutex<String>>,
     /// Message ID counter
     msg_id: Arc<Mutex<u32>>,
@@ -54,9 +81,15 @@ impl CDPClient {
             ws_tx: None,
             responses: Arc::new(Mutex::new(HashMap::new())),
             events: Arc::new(Mutex::new(HashMap::new())),
+            tab_registry: Arc::new(Mutex::new(HashMap::new())),
+            active_target_id: Arc::new(Mutex::new(String::new())),
             ax_ref_cache: Arc::new(Mutex::new(HashMap::new())),
             network_log: Arc::new(Mutex::new(VecDeque::new())),
             inflight_requests: Arc::new(Mutex::new(0)),
+            console_log: Arc::new(Mutex::new(VecDeque::new())),
+            intercept_rules: Arc::new(Mutex::new(Vec::new())),
+            frame_contexts: Arc::new(Mutex::new(HashMap::new())),
+            active_frame_id: Arc::new(Mutex::new(None)),
             chrome_pid: None,
             profile_id,
             current_url: Arc::new(Mutex::new(String::new())),
@@ -73,9 +106,15 @@ impl CDPClient {
             ws_tx: None,
             responses: Arc::new(Mutex::new(HashMap::new())),
             events: Arc::new(Mutex::new(HashMap::new())),
+            tab_registry: Arc::new(Mutex::new(HashMap::new())),
+            active_target_id: Arc::new(Mutex::new(String::new())),
             ax_ref_cache: Arc::new(Mutex::new(HashMap::new())),
             network_log: Arc::new(Mutex::new(VecDeque::new())),
             inflight_requests: Arc::new(Mutex::new(0)),
+            console_log: Arc::new(Mutex::new(VecDeque::new())),
+            intercept_rules: Arc::new(Mutex::new(Vec::new())),
+            frame_contexts: Arc::new(Mutex::new(HashMap::new())),
+            active_frame_id: Arc::new(Mutex::new(None)),
             chrome_pid: None, // not owned; won't kill on drop
             profile_id,
             current_url: Arc::new(Mutex::new(String::new())),
