@@ -36,6 +36,15 @@ export const ProfileItem: React.FC<ProfileItemProps> = ({
           {profile.description && <p className="description">{profile.description}</p>}
           <div className="profile-details">
             <span className="detail">Lang: {profile.lang}</span>
+            {profile.timezone && (
+              <span className="detail">TZ: {profile.timezone}</span>
+            )}
+            <span
+              className="detail detail-muted"
+              title={profile.user_data_dir}
+            >
+              Dir: …/{profile.user_data_dir.split(/[/\\]/).filter(Boolean).pop() ?? profile.user_data_dir}
+            </span>
             {profile.tags && profile.tags.length > 0 && (
               <>
                 {profile.tags.slice(0, 3).map((tag) => (

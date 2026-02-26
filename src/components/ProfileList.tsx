@@ -142,11 +142,12 @@ export const ProfileList: React.FC<ProfileListProps> = ({ onEditProfile, onClone
     );
   }
 
-  // Filter profiles by tags
+  // Filter profiles by name or tags
   const filteredProfiles = profiles.filter((profile) => {
     if (!tagFilter.trim()) return true;
     const keywords = tagFilter.trim().toLowerCase().split(/\s+/);
     return keywords.some((kw) =>
+      profile.name.toLowerCase().includes(kw) ||
       (profile.tags || []).some((tag) => tag.toLowerCase().includes(kw))
     );
   });
@@ -157,7 +158,7 @@ export const ProfileList: React.FC<ProfileListProps> = ({ onEditProfile, onClone
         <input
           type="text"
           className="filter-input"
-          placeholder="Filter by tags (e.g., work testing)"
+          placeholder="Search by name or tags…"
           value={tagFilter}
           onChange={(e) => setTagFilter(e.target.value)}
         />

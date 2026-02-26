@@ -1698,6 +1698,13 @@ input.readonly {
   }
 }
 
+/* Profile detail muted text */
+.detail-muted {
+  color: var(--text-light);
+  font-size: 0.78rem;
+  font-style: italic;
+}
+
 /* ===== Toast Notifications ===== */
 .toast-container {
   position: fixed;
