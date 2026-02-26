@@ -2,6 +2,8 @@ import React, { useEffect, useState } from 'react';
 import { ProfileItem } from './ProfileItem';
 import { tauriApi } from '../api/tauri';
 import type { BrowserProfile, RunningStatus } from '../types/profile';
+import { useToast } from './Toast';
+import { ConfirmDialog } from './ConfirmDialog';
 
 interface ProfileListProps {
   onEditProfile: (profile: BrowserProfile) => void;
@@ -15,6 +17,14 @@ export const ProfileList: React.FC<ProfileListProps> = ({ onEditProfile, onClone
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [tagFilter, setTagFilter] = useState('');
+
+  const { showToast } = useToast();
+  const [confirmState, setConfirmState] = useState<{
+    message: string;
+    onConfirm: () => void;
+    confirmLabel: string;
+    confirmClassName: string;
+  } | null>(null);
 
   const loadProfiles = async () => {
     try {
@@ -59,11 +69,11 @@ export const ProfileList: React.FC<ProfileListProps> = ({ onEditProfile, onClone
   const handleLaunch = async (id: string) => {
     try {
       await tauriApi.launchProfile(id);
-      // Refresh status immediately
       const status = await tauriApi.getRunningProfiles();
       setRunningStatus(status);
+      showToast('Browser launched', 'success');
     } catch (err) {
-      alert(`Failed to launch profile: ${err}`);
+      showToast(`Failed to launch: ${err}`, 'error');
     }
   };
 
@@ -71,32 +81,45 @@ export const ProfileList: React.FC<ProfileListProps> = ({ onEditProfile, onClone
     try {
       await tauriApi.activateProfile(id);
     } catch (err) {
-      alert(`Failed to activate profile: ${err}`);
+      showToast(`Failed to activate: ${err}`, 'error');
     }
   };
 
-  const handleKill = async (id: string) => {
-    try {
-      await tauriApi.killProfile(id);
-      // Refresh status immediately
-      const status = await tauriApi.getRunningProfiles();
-      setRunningStatus(status);
-    } catch (err) {
-      alert(`Failed to kill profile: ${err}`);
-    }
+  const handleKill = (id: string) => {
+    setConfirmState({
+      message: 'Kill this browser? Any unsaved data will be lost.',
+      confirmLabel: 'Kill',
+      confirmClassName: 'btn btn-danger',
+      onConfirm: async () => {
+        setConfirmState(null);
+        try {
+          await tauriApi.killProfile(id);
+          const status = await tauriApi.getRunningProfiles();
+          setRunningStatus(status);
+          showToast('Browser stopped', 'success');
+        } catch (err) {
+          showToast(`Failed to kill: ${err}`, 'error');
+        }
+      },
+    });
   };
 
-  const handleDelete = async (id: string) => {
-    if (!confirm('Are you sure you want to delete this profile?')) {
-      return;
-    }
-
-    try {
-      await tauriApi.deleteProfile(id);
-      await loadProfiles();
-    } catch (err) {
-      alert(`Failed to delete profile: ${err}`);
-    }
+  const handleDelete = (id: string) => {
+    setConfirmState({
+      message: 'Delete this profile? This cannot be undone.',
+      confirmLabel: 'Delete',
+      confirmClassName: 'btn btn-danger',
+      onConfirm: async () => {
+        setConfirmState(null);
+        try {
+          await tauriApi.deleteProfile(id);
+          await loadProfiles();
+          showToast('Profile deleted', 'success');
+        } catch (err) {
+          showToast(`Failed to delete: ${err}`, 'error');
+        }
+      },
+    });
   };
 
   if (loading) {
@@ -156,6 +179,15 @@ export const ProfileList: React.FC<ProfileListProps> = ({ onEditProfile, onClone
           ))
         )}
       </div>
+      {confirmState && (
+        <ConfirmDialog
+          message={confirmState.message}
+          confirmLabel={confirmState.confirmLabel}
+          confirmClassName={confirmState.confirmClassName}
+          onConfirm={confirmState.onConfirm}
+          onCancel={() => setConfirmState(null)}
+        />
+      )}
     </>
   );
 };
