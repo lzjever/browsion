@@ -481,6 +481,104 @@ struct ClearStorageParam {
     key: Option<String>,
 }
 
+// ── New Tab Wait ─────────────────────────────────────────────────────────
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct WaitNewTabParam {
+    /// Profile ID of the running browser
+    profile_id: String,
+    /// How long to wait for a new tab (ms, default 10000)
+    #[serde(default = "default_timeout")]
+    timeout_ms: u64,
+}
+
+// ── Page Text ────────────────────────────────────────────────────────────
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct ProfileIdParam {
+    /// Profile ID of the running browser
+    profile_id: String,
+}
+
+// ── Network Intercept ────────────────────────────────────────────────────
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct InterceptBlockParam {
+    /// Profile ID of the running browser
+    profile_id: String,
+    /// Substring to match against request URLs (e.g. "analytics", ".jpg", "/api/v2/")
+    url_pattern: String,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct InterceptMockParam {
+    /// Profile ID of the running browser
+    profile_id: String,
+    /// Substring to match against request URLs
+    url_pattern: String,
+    /// HTTP status code to return (e.g. 200, 404)
+    status: u16,
+    /// Response body string
+    body: String,
+    /// Content-Type header value (default: "application/json")
+    #[serde(default = "default_content_type")]
+    content_type: String,
+}
+fn default_content_type() -> String { "application/json".to_string() }
+
+// ── PDF ──────────────────────────────────────────────────────────────────
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct PdfParam {
+    /// Profile ID of the running browser
+    profile_id: String,
+    /// Print in landscape orientation (default: false)
+    #[serde(default)]
+    landscape: bool,
+    /// Include CSS background colors and images (default: true)
+    #[serde(default = "default_true")]
+    print_background: bool,
+    /// Scale factor 0.1–2.0 (default: 1.0)
+    #[serde(default = "default_scale")]
+    scale: f64,
+}
+fn default_true() -> bool { true }
+fn default_scale() -> f64 { 1.0 }
+
+// ── Touch ────────────────────────────────────────────────────────────────
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct TapParam {
+    /// Profile ID of the running browser
+    profile_id: String,
+    /// CSS selector of the element to tap
+    selector: String,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct SwipeParam {
+    /// Profile ID of the running browser
+    profile_id: String,
+    /// CSS selector of the element to start swipe from
+    selector: String,
+    /// Swipe direction: "up" | "down" | "left" | "right"
+    direction: String,
+    /// Distance to swipe in pixels (default: 300)
+    #[serde(default = "default_swipe_dist")]
+    distance: f64,
+}
+fn default_swipe_dist() -> f64 { 300.0 }
+
+// ── Frames ───────────────────────────────────────────────────────────────
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct SwitchFrameParam {
+    /// Profile ID of the running browser
+    profile_id: String,
+    /// Frame ID from get_frames (the "id" field)
+    frame_id: String,
+}
+
 // ---------------------------------------------------------------------------
 // MCP Server
 // ---------------------------------------------------------------------------
@@ -1491,6 +1589,200 @@ impl BrowsionMcpServer {
                     "storage_type": p.storage_type.as_deref().unwrap_or("local"),
                     "key": p.key,
                 }),
+            )
+            .await?;
+        Self::text_result(body)
+    }
+
+    // ── Tabs: wait_for_new_tab ────────────────────────────────────────────────
+
+    /// Wait for a new browser tab to open. Call BEFORE the action that opens the tab.
+    #[tool(description = "Wait for a new tab to open (e.g. clicking a target='_blank' link or window.open()). IMPORTANT: call this BEFORE the action that opens the tab to avoid race conditions. Returns the target_id of the new tab. Then call switch_tab(target_id) to start operating in it.")]
+    async fn wait_for_new_tab(
+        &self,
+        Parameters(p): Parameters<WaitNewTabParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let body = self
+            .api_post(
+                &format!("/api/browser/{}/tabs/wait_new", p.profile_id),
+                &json!({ "timeout_ms": p.timeout_ms }),
+            )
+            .await?;
+        Self::text_result(body)
+    }
+
+    // ── Observe: get_page_text ────────────────────────────────────────────────
+
+    /// Get the full visible text content of the current page.
+    #[tool(description = "Get the full visible text content of the current page (document.body.innerText). Returns clean text without HTML tags. Useful for reading page content, verifying text presence, or feeding content to an LLM. Truncated at 50,000 characters.")]
+    async fn get_page_text(
+        &self,
+        Parameters(p): Parameters<ProfileIdParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let body = self
+            .api_get(&format!("/api/browser/{}/page_text", p.profile_id))
+            .await?;
+        Self::text_result(body)
+    }
+
+    // ── Network: intercept ────────────────────────────────────────────────────
+
+    /// Block network requests matching a URL pattern.
+    #[tool(description = "Block all network requests whose URL contains url_pattern. Useful for blocking ads, analytics, or slow third-party resources during automation. Example: block_url(url_pattern='analytics.google.com') blocks all Google Analytics requests. Use clear_intercepts() to remove all rules.")]
+    async fn block_url(
+        &self,
+        Parameters(p): Parameters<InterceptBlockParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let body = self
+            .api_post(
+                &format!("/api/browser/{}/intercept/block", p.profile_id),
+                &json!({ "url_pattern": p.url_pattern }),
+            )
+            .await?;
+        Self::text_result(body)
+    }
+
+    /// Mock a network request with a synthetic response.
+    #[tool(description = "Mock a network request: return a synthetic HTTP response for all requests matching url_pattern. Useful for testing, faking API responses, or bypassing paywalls in testing environments. Example: mock_url(url_pattern='/api/user', status=200, body='{\"name\":\"test\"}')")]
+    async fn mock_url(
+        &self,
+        Parameters(p): Parameters<InterceptMockParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let body = self
+            .api_post(
+                &format!("/api/browser/{}/intercept/mock", p.profile_id),
+                &json!({
+                    "url_pattern": p.url_pattern,
+                    "status": p.status,
+                    "body": p.body,
+                    "content_type": p.content_type
+                }),
+            )
+            .await?;
+        Self::text_result(body)
+    }
+
+    /// Remove all network intercept rules.
+    #[tool(description = "Remove all network intercept rules (added with block_url or mock_url) and disable network interception. Restores normal network behavior.")]
+    async fn clear_intercepts(
+        &self,
+        Parameters(p): Parameters<ProfileIdParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let body = self
+            .api_delete(&format!("/api/browser/{}/intercept", p.profile_id))
+            .await?;
+        Self::text_result(body)
+    }
+
+    // ── PDF ──────────────────────────────────────────────────────────────────
+
+    /// Generate a PDF of the current page.
+    #[tool(description = "Generate a PDF of the current page. Returns base64-encoded PDF data. Captures the full page including backgrounds. Options: landscape (bool), print_background (bool, default true), scale (0.1-2.0, default 1.0). PDF format, A4 paper size with 0.4in margins.")]
+    async fn print_to_pdf(
+        &self,
+        Parameters(p): Parameters<PdfParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let body = self
+            .api_get(&format!(
+                "/api/browser/{}/pdf?landscape={}&print_background={}&scale={}",
+                p.profile_id, p.landscape, p.print_background, p.scale
+            ))
+            .await?;
+        Self::text_result(body)
+    }
+
+    // ── Touch ─────────────────────────────────────────────────────────────────
+
+    /// Tap an element using a touch event.
+    #[tool(description = "Tap an element using a touch event (touchStart + touchEnd). Use for mobile-emulated pages or apps with touch-only event handlers. For regular desktop clicks, use click() instead.")]
+    async fn tap(
+        &self,
+        Parameters(p): Parameters<TapParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let body = self
+            .api_post(
+                &format!("/api/browser/{}/tap", p.profile_id),
+                &json!({ "selector": p.selector }),
+            )
+            .await?;
+        Self::text_result(body)
+    }
+
+    /// Swipe on an element (touch gesture).
+    #[tool(description = "Perform a swipe touch gesture on an element. direction: 'up' | 'down' | 'left' | 'right'. distance: pixels to swipe (default 300). Use for carousels, sliders, swipeable lists, pull-to-refresh. Requires mobile emulation for best results.")]
+    async fn swipe(
+        &self,
+        Parameters(p): Parameters<SwipeParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let body = self
+            .api_post(
+                &format!("/api/browser/{}/swipe", p.profile_id),
+                &json!({
+                    "selector": p.selector,
+                    "direction": p.direction,
+                    "distance": p.distance
+                }),
+            )
+            .await?;
+        Self::text_result(body)
+    }
+
+    // ── Frames ────────────────────────────────────────────────────────────────
+
+    /// List all frames (iframes) in the current page.
+    #[tool(description = "List all frames (main frame + iframes) in the current page. Returns each frame's id, url, name, and parent_id. Use the frame id with switch_frame() to operate inside an iframe.")]
+    async fn get_frames(
+        &self,
+        Parameters(p): Parameters<ProfileIdParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let body = self
+            .api_get(&format!("/api/browser/{}/frames", p.profile_id))
+            .await?;
+        Self::text_result(body)
+    }
+
+    /// Switch the JS execution context to an iframe.
+    #[tool(description = "Switch execution context to an iframe so subsequent evaluate_js, click, type_text, etc. operate inside that frame. Use get_frames() to find the frame_id. Only works for same-origin iframes. Call main_frame() to switch back.")]
+    async fn switch_frame(
+        &self,
+        Parameters(p): Parameters<SwitchFrameParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let body = self
+            .api_post(
+                &format!("/api/browser/{}/switch_frame", p.profile_id),
+                &json!({ "frame_id": p.frame_id }),
+            )
+            .await?;
+        Self::text_result(body)
+    }
+
+    /// Switch back to the main frame context.
+    #[tool(description = "Switch back to the main page frame after using switch_frame(). Must be called before navigating or using get_page_state() after iframe operations.")]
+    async fn main_frame(
+        &self,
+        Parameters(p): Parameters<ProfileIdParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let body = self
+            .api_post(
+                &format!("/api/browser/{}/main_frame", p.profile_id),
+                &json!({}),
+            )
+            .await?;
+        Self::text_result(body)
+    }
+
+    // ── Console: clear ────────────────────────────────────────────────────────
+
+    /// Clear the console log buffer.
+    #[tool(description = "Clear all buffered console log entries. Useful before an operation you want to monitor cleanly. Console capture is always active — no need to call enable_console_capture first.")]
+    async fn clear_console_logs(
+        &self,
+        Parameters(p): Parameters<ProfileIdParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let body = self
+            .api_post(
+                &format!("/api/browser/{}/console/clear", p.profile_id),
+                &json!({}),
             )
             .await?;
         Self::text_result(body)
