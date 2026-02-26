@@ -1156,40 +1156,44 @@ impl CDPClient {
     /// Type text into an element (fast mode: sets value + fires input/change events).
     /// Works for most inputs including React controlled components.
     pub async fn type_text(&self, selector: &str, text: &str) -> Result<(), String> {
-        let escaped_selector = selector.replace('\\', "\\\\").replace('\'', "\\'");
+        let selector_json = serde_json::to_string(selector).unwrap_or_default();
         let text_json = serde_json::to_string(text).unwrap_or_default();
 
+        let js = format!(
+            r#"(function() {{
+                function deepQuery(root, sel) {{
+                    let el = root.querySelector(sel);
+                    if (el) return el;
+                    for (const host of root.querySelectorAll('*')) {{
+                        if (host.shadowRoot) {{
+                            const found = deepQuery(host.shadowRoot, sel);
+                            if (found) return found;
+                        }}
+                    }}
+                    return null;
+                }}
+                const el = deepQuery(document, {selector_json});
+                if (!el) return false;
+                el.focus();
+                const niv = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')
+                    || Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value');
+                if (niv && niv.set) {{
+                    niv.set.call(el, {text_json});
+                }} else {{
+                    el.value = {text_json};
+                }}
+                el.dispatchEvent(new Event('input', {{bubbles: true}}));
+                el.dispatchEvent(new Event('change', {{bubbles: true}}));
+                return true;
+            }})()"#
+        );
+
         let result = self
-            .send_command(
-                "Runtime.evaluate",
-                json!({
-                    "expression": format!(
-                        "(function() {{ \
-                            const el = document.querySelector('{escaped_selector}'); \
-                            if(!el) return false; \
-                            el.focus(); \
-                            const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value') \
-                                || Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value'); \
-                            if(nativeInputValueSetter && nativeInputValueSetter.set) {{ \
-                                nativeInputValueSetter.set.call(el, {text_json}); \
-                            }} else {{ \
-                                el.value = {text_json}; \
-                            }} \
-                            el.dispatchEvent(new Event('input', {{bubbles: true}})); \
-                            el.dispatchEvent(new Event('change', {{bubbles: true}})); \
-                            return true; \
-                        }})()"
-                    ),
-                    "returnByValue": true
-                }),
-            )
+            .send_command("Runtime.evaluate", json!({"expression": js, "returnByValue": true}))
             .await?;
 
-        let typed = result
-            .get("result")
-            .and_then(|r| r.get("result"))
-            .and_then(|r| r.get("value"))
-            .and_then(|v| v.as_bool())
+        let typed = result["result"]["result"]["value"]
+            .as_bool()
             .unwrap_or(false);
 
         if typed {
@@ -1409,10 +1413,25 @@ impl CDPClient {
 
     /// Scroll an element into view (centers it in the viewport).
     pub async fn scroll_into_view(&self, selector: &str) -> Result<(), String> {
-        let escaped = selector.replace('\\', "\\\\").replace('\'', "\\'");
+        let selector_json = serde_json::to_string(selector).unwrap_or_default();
         let js = format!(
-            "(function() {{ const el = document.querySelector('{}'); if(!el) return false; el.scrollIntoView({{behavior:'instant',block:'center'}}); return true; }})()",
-            escaped
+            r#"(function() {{
+                function deepQuery(root, sel) {{
+                    let el = root.querySelector(sel);
+                    if (el) return el;
+                    for (const host of root.querySelectorAll('*')) {{
+                        if (host.shadowRoot) {{
+                            const found = deepQuery(host.shadowRoot, sel);
+                            if (found) return found;
+                        }}
+                    }}
+                    return null;
+                }}
+                const el = deepQuery(document, {selector_json});
+                if (!el) return false;
+                el.scrollIntoView({{behavior: 'instant', block: 'center'}});
+                return true;
+            }})()"#
         );
         let result = self.evaluate_js(&js).await?;
         if result.as_bool().unwrap_or(false) {
@@ -1424,19 +1443,21 @@ impl CDPClient {
 
     /// Select an option in a <select> element by value or visible text.
     pub async fn select_option(&self, selector: &str, value: &str) -> Result<(), String> {
-        let escaped = selector.replace('\\', "\\\\").replace('\'', "\\'");
+        let selector_json = serde_json::to_string(selector).unwrap_or_default();
         let value_json = serde_json::to_string(value).unwrap_or_default();
         let js = format!(
-            "(function() {{ \
-                const el = document.querySelector('{escaped}'); \
-                if(!el) return 'not_found'; \
-                const opt = Array.from(el.options).find(o => o.value === {value_json} || o.text.trim() === {value_json}); \
-                if(!opt) return 'no_option'; \
-                el.value = opt.value; \
-                el.dispatchEvent(new Event('input', {{bubbles:true}})); \
-                el.dispatchEvent(new Event('change', {{bubbles:true}})); \
-                return 'ok'; \
-            }})()"
+            r#"(function() {{
+                const el = document.querySelector({selector_json});
+                if (!el) return 'not_found';
+                const opt = Array.from(el.options).find(
+                    o => o.value === {value_json} || o.text.trim() === {value_json}
+                );
+                if (!opt) return 'no_option';
+                el.value = opt.value;
+                el.dispatchEvent(new Event('input', {{bubbles: true}}));
+                el.dispatchEvent(new Event('change', {{bubbles: true}}));
+                return 'ok';
+            }})()"#
         );
         let result = self.evaluate_js(&js).await?;
         match result.as_str().unwrap_or("") {
@@ -1449,25 +1470,30 @@ impl CDPClient {
         }
     }
 
-    /// Scroll the page
+    /// Scroll the page in the given direction.
+    /// Uses real mouse wheel events at the viewport center.
     pub async fn scroll(&self, direction: &str, amount: u32) -> Result<(), String> {
-        let scroll_amount = amount as i32;
-        let (x, y) = match direction {
-            "up" => (0, -scroll_amount),
-            "down" => (0, scroll_amount),
-            "left" => (-scroll_amount, 0),
-            "right" => (scroll_amount, 0),
-            _ => (0, scroll_amount),
+        let amount = amount as f64;
+        let (delta_x, delta_y) = match direction {
+            "up" => (0.0, -amount),
+            "down" => (0.0, amount),
+            "left" => (-amount, 0.0),
+            "right" => (amount, 0.0),
+            _ => (0.0, amount),
         };
-
+        // Dispatch at viewport center
         self.send_command(
-            "Runtime.evaluate",
+            "Input.dispatchMouseEvent",
             json!({
-                "expression": format!("window.scrollBy({}, {})", x, y)
+                "type": "mouseWheel",
+                "x": 640.0,
+                "y": 400.0,
+                "deltaX": delta_x,
+                "deltaY": delta_y,
+                "modifiers": 0
             }),
         )
         .await?;
-
         tracing::debug!("Scrolled: {} by {}", direction, amount);
         Ok(())
     }
@@ -1500,24 +1526,28 @@ impl CDPClient {
     pub async fn wait_for_element(&self, selector: &str, timeout_ms: u64) -> Result<(), String> {
         let timeout = std::time::Duration::from_millis(timeout_ms);
         let start = std::time::Instant::now();
-        let escaped = selector.replace('\\', "\\\\").replace('\'', "\\'");
+        let selector_json = serde_json::to_string(selector).unwrap_or_default();
+
+        let js = format!(
+            r#"(function() {{
+                function deepQuery(root, sel) {{
+                    if (root.querySelector(sel)) return true;
+                    for (const host of root.querySelectorAll('*')) {{
+                        if (host.shadowRoot && deepQuery(host.shadowRoot, sel)) return true;
+                    }}
+                    return false;
+                }}
+                return deepQuery(document, {selector_json});
+            }})()"#
+        );
 
         loop {
             let result = self
-                .send_command(
-                    "Runtime.evaluate",
-                    json!({
-                        "expression": format!("!!document.querySelector('{}')", escaped),
-                        "returnByValue": true
-                    }),
-                )
+                .send_command("Runtime.evaluate", json!({"expression": js, "returnByValue": true}))
                 .await?;
 
-            let found = result
-                .get("result")
-                .and_then(|r| r.get("result"))
-                .and_then(|r| r.get("value"))
-                .and_then(|v| v.as_bool())
+            let found = result["result"]["result"]["value"]
+                .as_bool()
                 .unwrap_or(false);
 
             if found {
@@ -2583,53 +2613,26 @@ impl CDPClient {
 
     // ── Advanced: Console Logs ─────────────────────────────────────
 
-    /// Get recent console log entries via JS.
+    /// Get recent console log entries (captures console.*, browser errors, and JS exceptions).
+    /// Console capture is always active — no need to call enable_console_capture first.
+    /// Returns up to 500 most recent entries.
     pub async fn get_console_logs(&self) -> Result<serde_json::Value, String> {
-        let js = r#"
-            (function() {
-                if (!window.__browsion_console_logs) return [];
-                return window.__browsion_console_logs.slice(-100);
-            })()
-        "#;
-        self.evaluate_js(js).await
+        let log = self.console_log.lock().await;
+        let entries: Vec<serde_json::Value> = log.iter().cloned().collect();
+        Ok(serde_json::Value::Array(entries))
     }
 
-    /// Install a console log interceptor that stores messages in-page.
+    /// Clear the console log.
+    pub async fn clear_console_logs(&self) {
+        self.console_log.lock().await.clear();
+    }
+
+    /// No-op for backward compatibility. Console capture is always on via CDP events.
+    /// Previously this injected a JS interceptor; that approach was fragile.
     pub async fn enable_console_capture(&self) -> Result<(), String> {
-        let js = r#"
-            (function() {
-                if (window.__browsion_console_logs) return;
-                window.__browsion_console_logs = [];
-                const orig = console.log;
-                console.log = function() {
-                    window.__browsion_console_logs.push({
-                        type: 'log',
-                        args: Array.from(arguments).map(a => String(a)),
-                        ts: Date.now()
-                    });
-                    orig.apply(console, arguments);
-                };
-                const origErr = console.error;
-                console.error = function() {
-                    window.__browsion_console_logs.push({
-                        type: 'error',
-                        args: Array.from(arguments).map(a => String(a)),
-                        ts: Date.now()
-                    });
-                    origErr.apply(console, arguments);
-                };
-                const origWarn = console.warn;
-                console.warn = function() {
-                    window.__browsion_console_logs.push({
-                        type: 'warn',
-                        args: Array.from(arguments).map(a => String(a)),
-                        ts: Date.now()
-                    });
-                    origWarn.apply(console, arguments);
-                };
-            })()
-        "#;
-        self.evaluate_js(js).await?;
+        // Console capture is automatic via Runtime.consoleAPICalled + Log.entryAdded.
+        // This method is kept for API compatibility only.
+        tracing::debug!("enable_console_capture: no-op (CDP events always active)");
         Ok(())
     }
 
