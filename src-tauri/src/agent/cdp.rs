@@ -1192,6 +1192,72 @@ impl CDPClient {
         }
     }
 
+    /// Capture a screenshot of a specific element identified by a CSS selector.
+    /// Uses deep shadow DOM traversal to find the element.
+    /// Returns base64-encoded image.
+    pub async fn screenshot_element(&self, selector: &str, format: &str, quality: Option<u32>) -> Result<String, String> {
+        // 1. Get element bounding rect including scroll offset (page-absolute)
+        let selector_json = serde_json::to_string(selector).unwrap_or_default();
+        let js = format!(r#"(function() {{
+            function deepQuery(root, sel) {{
+                let el = root.querySelector(sel);
+                if (el) return el;
+                for (const host of root.querySelectorAll('*')) {{
+                    if (host.shadowRoot) {{
+                        const found = deepQuery(host.shadowRoot, sel);
+                        if (found) return found;
+                    }}
+                }}
+                return null;
+            }}
+            const el = deepQuery(document, {selector_json});
+            if (!el) return null;
+            const rect = el.getBoundingClientRect();
+            return {{
+                x: rect.left + window.scrollX,
+                y: rect.top + window.scrollY,
+                width: rect.width,
+                height: rect.height
+            }};
+        }})()"#);
+
+        let result = self.evaluate_js(&js).await?;
+        if result.is_null() {
+            return Err(format!("screenshot_element: element not found for '{}'", selector));
+        }
+
+        let x = result["x"].as_f64().ok_or("screenshot_element: no x")?;
+        let y = result["y"].as_f64().ok_or("screenshot_element: no y")?;
+        let width = result["width"].as_f64().ok_or("screenshot_element: no width")?;
+        let height = result["height"].as_f64().ok_or("screenshot_element: no height")?;
+
+        if width < 1.0 || height < 1.0 {
+            return Err(format!("screenshot_element: element '{}' has zero size", selector));
+        }
+
+        // 2. Capture with clip
+        let fmt = match format { "jpeg" => "jpeg", "webp" => "webp", _ => "png" };
+        let mut params = json!({
+            "format": fmt,
+            "clip": {
+                "x": x,
+                "y": y,
+                "width": width,
+                "height": height,
+                "scale": 1.0
+            }
+        });
+        if fmt == "jpeg" {
+            params["quality"] = json!(quality.unwrap_or(85));
+        }
+
+        let response = self.send_command("Page.captureScreenshot", params).await?;
+        response["result"]["data"]
+            .as_str()
+            .map(|s| s.to_string())
+            .ok_or("screenshot_element: no data in response".to_string())
+    }
+
     // ── Coordinate-based & drag interactions ────────────────────────
 
     /// Click at specific viewport coordinates. Use for canvas, image maps, or vision-based automation.

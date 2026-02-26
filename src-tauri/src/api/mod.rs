@@ -76,6 +76,7 @@ pub fn router(state: ApiState) -> Router {
         .route("/api/browser/:id/wait_for_nav", post(browser_wait_for_navigation))
         .route("/api/browser/:id/upload_file", post(browser_upload_file))
         .route("/api/browser/:id/screenshot", get(browser_screenshot))
+        .route("/api/browser/:id/screenshot_element", get(browser_screenshot_element))
         .route("/api/browser/:id/dom_context", get(browser_dom_context))
         .route("/api/browser/:id/ax_tree", get(browser_ax_tree))
         .route("/api/browser/:id/page_state", get(browser_page_state))
@@ -800,6 +801,30 @@ async fn browser_screenshot(
         .await
         .map_err(cdp_err)?;
     Ok(Json(serde_json::json!({ "image": image, "format": format })))
+}
+
+/// Query params for screenshot_element
+#[derive(serde::Deserialize, Default)]
+struct ScreenshotElementQuery {
+    selector: String,
+    format: Option<String>,
+    quality: Option<u32>,
+}
+
+async fn browser_screenshot_element(
+    State(state): State<ApiState>,
+    AxumPath(id): AxumPath<String>,
+    axum::extract::Query(q): axum::extract::Query<ScreenshotElementQuery>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let cdp_port = require_cdp_port(&state, &id)?;
+    let handle = state.session_manager.get_client(&id, cdp_port).await.map_err(cdp_err)?;
+    let client = handle.lock().await;
+    let format = q.format.as_deref().unwrap_or("png");
+    let data = client
+        .screenshot_element(&q.selector, format, q.quality)
+        .await
+        .map_err(cdp_err)?;
+    Ok(Json(serde_json::json!({ "data": data, "format": format })))
 }
 
 async fn browser_dom_context(

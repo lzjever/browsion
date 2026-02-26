@@ -328,6 +328,20 @@ struct ScreenshotParam {
 }
 fn default_screenshot_format() -> String { "png".to_string() }
 
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct ScreenshotElementParam {
+    /// Browser session ID (profile_id from list_profiles)
+    profile_id: String,
+    /// CSS selector of element to screenshot (supports Shadow DOM traversal)
+    selector: String,
+    /// Image format: "png" (default), "jpeg", "webp"
+    #[serde(default)]
+    format: Option<String>,
+    /// JPEG quality 0-100 (only for jpeg format, default 85)
+    #[serde(default)]
+    quality: Option<u32>,
+}
+
 // ── Dialog / coordinate / drag / network / text-wait ─────────────────────────
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -895,6 +909,42 @@ impl BrowsionMcpServer {
                 _ => "image/png",
             };
             Ok(CallToolResult::success(vec![Content::image(image, mime)]))
+        } else {
+            Self::text_result(body)
+        }
+    }
+
+    /// Take a screenshot of a specific element
+    #[tool(description = "Capture a screenshot of a specific element identified by a CSS selector. Uses deep Shadow DOM traversal to find the element even inside web components. Returns the image inline. Useful for visual verification of a specific UI component without capturing the entire page. format: 'png' (default), 'jpeg', 'webp'. quality: 0-100 for jpeg (default 85).")]
+    async fn screenshot_element(
+        &self,
+        Parameters(p): Parameters<ScreenshotElementParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let format = p.format.as_deref().unwrap_or("png");
+        let encoded_selector: String = p.selector.chars().flat_map(|c| {
+            if c.is_alphanumeric() || matches!(c, '-' | '_' | '.' | '~' | '#' | '[' | ']' | '=' | ':') {
+                vec![c]
+            } else {
+                format!("%{:02X}", c as u32).chars().collect::<Vec<_>>()
+            }
+        }).collect();
+        let mut url = format!(
+            "/api/browser/{}/screenshot_element?selector={}&format={}",
+            p.profile_id,
+            encoded_selector,
+            format,
+        );
+        if let Some(q) = p.quality { url.push_str(&format!("&quality={}", q)); }
+        let body = self.api_get(&url).await?;
+        let parsed: serde_json::Value =
+            serde_json::from_str(&body).unwrap_or(serde_json::Value::Null);
+        if let Some(data) = parsed.get("data").and_then(|v| v.as_str()) {
+            let mime = match format {
+                "jpeg" => "image/jpeg",
+                "webp" => "image/webp",
+                _ => "image/png",
+            };
+            Ok(CallToolResult::success(vec![Content::image(data, mime)]))
         } else {
             Self::text_result(body)
         }
