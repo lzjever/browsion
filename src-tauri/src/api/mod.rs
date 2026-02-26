@@ -90,6 +90,7 @@ pub fn router(state: ApiState) -> Router {
         .route("/api/browser/:id/tabs/new", post(browser_new_tab))
         .route("/api/browser/:id/tabs/switch", post(browser_switch_tab))
         .route("/api/browser/:id/tabs/close", post(browser_close_tab))
+        .route("/api/browser/:id/tabs/wait_new", post(browser_wait_for_new_tab))
         // Advanced: Cookies
         .route("/api/browser/:id/cookies", get(browser_get_cookies))
         .route("/api/browser/:id/cookies/set", post(browser_set_cookie))
@@ -109,6 +110,18 @@ pub fn router(state: ApiState) -> Router {
         .route("/api/browser/:id/wait_for_url", post(browser_wait_for_url))
         // Advanced: Storage (localStorage / sessionStorage)
         .route("/api/browser/:id/storage", get(browser_get_storage).post(browser_set_storage).delete(browser_clear_storage))
+        // Advanced: Page text, Network intercept, PDF, Touch, Frames
+        .route("/api/browser/:id/page_text", get(browser_get_page_text))
+        .route("/api/browser/:id/intercept/block", post(browser_intercept_block))
+        .route("/api/browser/:id/intercept/mock", post(browser_intercept_mock))
+        .route("/api/browser/:id/intercept", delete(browser_clear_intercepts))
+        .route("/api/browser/:id/pdf", get(browser_print_to_pdf))
+        .route("/api/browser/:id/tap", post(browser_tap))
+        .route("/api/browser/:id/swipe", post(browser_swipe))
+        .route("/api/browser/:id/frames", get(browser_get_frames))
+        .route("/api/browser/:id/switch_frame", post(browser_switch_frame))
+        .route("/api/browser/:id/main_frame", post(browser_main_frame))
+        .route("/api/browser/:id/console/clear", post(browser_clear_console))
         // Utility
         .route("/api/health", get(health))
         .with_state(state)
@@ -453,6 +466,60 @@ struct RefReq {
 struct TypeRefReq {
     ref_id: String,
     text: String,
+}
+
+// ── Phase 6: Flatten Mode request structs ─────────────────────────────────────
+
+#[derive(serde::Deserialize)]
+struct WaitNewTabReq {
+    #[serde(default = "default_timeout_ms")]
+    timeout_ms: u64,
+}
+
+#[derive(serde::Deserialize)]
+struct InterceptBlockReq {
+    url_pattern: String,
+}
+
+#[derive(serde::Deserialize)]
+struct InterceptMockReq {
+    url_pattern: String,
+    status: u16,
+    body: String,
+    #[serde(default = "default_content_type")]
+    content_type: String,
+}
+fn default_content_type() -> String { "application/json".to_string() }
+
+#[derive(serde::Deserialize)]
+struct PdfReq {
+    #[serde(default)]
+    landscape: bool,
+    #[serde(default = "default_print_bg")]
+    print_background: bool,
+    #[serde(default = "default_scale")]
+    scale: f64,
+}
+fn default_print_bg() -> bool { true }
+fn default_scale() -> f64 { 1.0 }
+
+#[derive(serde::Deserialize)]
+struct TapReq {
+    selector: String,
+}
+
+#[derive(serde::Deserialize)]
+struct SwipeReq {
+    selector: String,
+    direction: String,
+    #[serde(default = "default_swipe_distance")]
+    distance: f64,
+}
+fn default_swipe_distance() -> f64 { 300.0 }
+
+#[derive(serde::Deserialize)]
+struct SwitchFrameReq {
+    frame_id: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -1270,6 +1337,154 @@ async fn browser_clear_storage(
         Some(key) => client.remove_storage_item(&req.storage_type, key).await.map_err(cdp_err)?,
         None => client.clear_storage(&req.storage_type).await.map_err(cdp_err)?,
     }
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+// ---------------------------------------------------------------------------
+// Phase 6: Flatten Mode - wait_for_new_tab, page_text, intercept, PDF, touch, frames
+// ---------------------------------------------------------------------------
+
+async fn browser_wait_for_new_tab(
+    State(state): State<ApiState>,
+    AxumPath(id): AxumPath<String>,
+    Json(req): Json<WaitNewTabReq>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let cdp_port = require_cdp_port(&state, &id)?;
+    let handle = state.session_manager.get_client(&id, cdp_port).await.map_err(cdp_err)?;
+    let client = handle.lock().await;
+    let target_id = client.wait_for_new_tab(req.timeout_ms).await.map_err(cdp_err)?;
+    Ok(Json(serde_json::json!({ "target_id": target_id })))
+}
+
+async fn browser_get_page_text(
+    State(state): State<ApiState>,
+    AxumPath(id): AxumPath<String>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let cdp_port = require_cdp_port(&state, &id)?;
+    let handle = state.session_manager.get_client(&id, cdp_port).await.map_err(cdp_err)?;
+    let client = handle.lock().await;
+    let text = client.get_page_text().await.map_err(cdp_err)?;
+    Ok(Json(serde_json::json!({ "text": text, "length": text.len() })))
+}
+
+async fn browser_intercept_block(
+    State(state): State<ApiState>,
+    AxumPath(id): AxumPath<String>,
+    Json(req): Json<InterceptBlockReq>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let cdp_port = require_cdp_port(&state, &id)?;
+    let handle = state.session_manager.get_client(&id, cdp_port).await.map_err(cdp_err)?;
+    let client = handle.lock().await;
+    client.block_url(&req.url_pattern).await.map_err(cdp_err)?;
+    Ok(Json(serde_json::json!({ "ok": true, "rule": "block", "pattern": req.url_pattern })))
+}
+
+async fn browser_intercept_mock(
+    State(state): State<ApiState>,
+    AxumPath(id): AxumPath<String>,
+    Json(req): Json<InterceptMockReq>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let cdp_port = require_cdp_port(&state, &id)?;
+    let handle = state.session_manager.get_client(&id, cdp_port).await.map_err(cdp_err)?;
+    let client = handle.lock().await;
+    client.mock_url(&req.url_pattern, req.status, &req.body, &req.content_type)
+        .await.map_err(cdp_err)?;
+    Ok(Json(serde_json::json!({ "ok": true, "rule": "mock", "pattern": req.url_pattern })))
+}
+
+async fn browser_clear_intercepts(
+    State(state): State<ApiState>,
+    AxumPath(id): AxumPath<String>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let cdp_port = require_cdp_port(&state, &id)?;
+    let handle = state.session_manager.get_client(&id, cdp_port).await.map_err(cdp_err)?;
+    let client = handle.lock().await;
+    client.clear_intercepts().await.map_err(cdp_err)?;
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+async fn browser_print_to_pdf(
+    State(state): State<ApiState>,
+    AxumPath(id): AxumPath<String>,
+    axum::extract::Query(req): axum::extract::Query<PdfReq>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let cdp_port = require_cdp_port(&state, &id)?;
+    let handle = state.session_manager.get_client(&id, cdp_port).await.map_err(cdp_err)?;
+    let client = handle.lock().await;
+    let data = client.print_to_pdf(req.landscape, req.print_background, req.scale)
+        .await.map_err(cdp_err)?;
+    Ok(Json(serde_json::json!({ "data": data, "format": "pdf" })))
+}
+
+async fn browser_tap(
+    State(state): State<ApiState>,
+    AxumPath(id): AxumPath<String>,
+    Json(req): Json<TapReq>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let cdp_port = require_cdp_port(&state, &id)?;
+    let handle = state.session_manager.get_client(&id, cdp_port).await.map_err(cdp_err)?;
+    let client = handle.lock().await;
+    client.tap(&req.selector).await.map_err(cdp_err)?;
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+async fn browser_swipe(
+    State(state): State<ApiState>,
+    AxumPath(id): AxumPath<String>,
+    Json(req): Json<SwipeReq>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let cdp_port = require_cdp_port(&state, &id)?;
+    let handle = state.session_manager.get_client(&id, cdp_port).await.map_err(cdp_err)?;
+    let client = handle.lock().await;
+    client.swipe(&req.selector, &req.direction, req.distance)
+        .await.map_err(cdp_err)?;
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+async fn browser_get_frames(
+    State(state): State<ApiState>,
+    AxumPath(id): AxumPath<String>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let cdp_port = require_cdp_port(&state, &id)?;
+    let handle = state.session_manager.get_client(&id, cdp_port).await.map_err(cdp_err)?;
+    let client = handle.lock().await;
+    let frames = client.get_frames().await.map_err(cdp_err)?;
+    let value = serde_json::to_value(frames)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(Json(value))
+}
+
+async fn browser_switch_frame(
+    State(state): State<ApiState>,
+    AxumPath(id): AxumPath<String>,
+    Json(req): Json<SwitchFrameReq>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let cdp_port = require_cdp_port(&state, &id)?;
+    let handle = state.session_manager.get_client(&id, cdp_port).await.map_err(cdp_err)?;
+    let client = handle.lock().await;
+    client.switch_frame(&req.frame_id).await.map_err(cdp_err)?;
+    Ok(Json(serde_json::json!({ "ok": true, "frame_id": req.frame_id })))
+}
+
+async fn browser_main_frame(
+    State(state): State<ApiState>,
+    AxumPath(id): AxumPath<String>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let cdp_port = require_cdp_port(&state, &id)?;
+    let handle = state.session_manager.get_client(&id, cdp_port).await.map_err(cdp_err)?;
+    let client = handle.lock().await;
+    client.main_frame().await;
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+async fn browser_clear_console(
+    State(state): State<ApiState>,
+    AxumPath(id): AxumPath<String>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let cdp_port = require_cdp_port(&state, &id)?;
+    let handle = state.session_manager.get_client(&id, cdp_port).await.map_err(cdp_err)?;
+    let client = handle.lock().await;
+    client.clear_console_logs().await;
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
