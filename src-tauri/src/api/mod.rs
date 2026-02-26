@@ -1,0 +1,1136 @@
+//! Local HTTP API for MCP and automation.
+//! Profile CRUD, browser launch/kill, and full CDP browser control.
+
+use crate::commands::get_effective_chrome_path_from_config;
+use crate::config::{validation, BrowserProfile};
+use crate::state::AppState;
+#[allow(unused_imports)]
+use axum::{
+    extract::{Path as AxumPath, State, Request},
+    http::StatusCode,
+    middleware::{self, Next},
+    response::Response,
+    routing::{delete, get, post, put},
+    Json, Router,
+};
+use std::collections::HashMap;
+use std::sync::Arc;
+
+pub type ApiState = Arc<AppState>;
+
+/// API key authentication middleware.
+/// Skips authentication for GET /api/health so the MCP binary can probe the server.
+async fn api_key_auth(
+    axum::extract::State(expected_key): axum::extract::State<String>,
+    request: Request,
+    next: Next,
+) -> Result<Response, StatusCode> {
+    if request.uri().path() == "/api/health" {
+        return Ok(next.run(request).await);
+    }
+    let provided = request
+        .headers()
+        .get("X-API-Key")
+        .and_then(|v| v.to_str().ok());
+    match provided {
+        Some(k) if k == expected_key => Ok(next.run(request).await),
+        _ => Err(StatusCode::UNAUTHORIZED),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Router
+// ---------------------------------------------------------------------------
+
+pub fn router(state: ApiState) -> Router {
+    Router::new()
+        // Profile CRUD
+        .route("/api/profiles", get(list_profiles).post(add_profile))
+        .route(
+            "/api/profiles/:id",
+            get(get_profile).put(update_profile).delete(delete_profile),
+        )
+        // Browser lifecycle
+        .route("/api/launch/:profile_id", post(launch_profile))
+        .route("/api/kill/:profile_id", post(kill_profile))
+        .route("/api/running", get(get_running_browsers))
+        // Browser control (CDP)
+        .route("/api/browser/:id/navigate", post(browser_navigate))
+        .route("/api/browser/:id/navigate_wait", post(browser_navigate_wait))
+        .route("/api/browser/:id/url", get(browser_get_url))
+        .route("/api/browser/:id/title", get(browser_get_title))
+        .route("/api/browser/:id/back", post(browser_go_back))
+        .route("/api/browser/:id/forward", post(browser_go_forward))
+        .route("/api/browser/:id/reload", post(browser_reload))
+        .route("/api/browser/:id/click", post(browser_click))
+        .route("/api/browser/:id/hover", post(browser_hover))
+        .route("/api/browser/:id/double_click", post(browser_double_click))
+        .route("/api/browser/:id/right_click", post(browser_right_click))
+        .route("/api/browser/:id/type", post(browser_type_text))
+        .route("/api/browser/:id/slow_type", post(browser_slow_type))
+        .route("/api/browser/:id/press_key", post(browser_press_key))
+        .route("/api/browser/:id/scroll", post(browser_scroll))
+        .route("/api/browser/:id/scroll_into_view", post(browser_scroll_into_view))
+        .route("/api/browser/:id/select_option", post(browser_select_option))
+        .route("/api/browser/:id/wait_for", post(browser_wait_for))
+        .route("/api/browser/:id/wait_for_nav", post(browser_wait_for_navigation))
+        .route("/api/browser/:id/upload_file", post(browser_upload_file))
+        .route("/api/browser/:id/screenshot", get(browser_screenshot))
+        .route("/api/browser/:id/dom_context", get(browser_dom_context))
+        .route("/api/browser/:id/ax_tree", get(browser_ax_tree))
+        .route("/api/browser/:id/page_state", get(browser_page_state))
+        .route("/api/browser/:id/click_ref", post(browser_click_ref))
+        .route("/api/browser/:id/type_ref", post(browser_type_ref))
+        .route("/api/browser/:id/focus_ref", post(browser_focus_ref))
+        .route("/api/browser/:id/extract", post(browser_extract))
+        .route("/api/browser/:id/evaluate", post(browser_evaluate))
+        // Advanced: Tabs
+        .route("/api/browser/:id/tabs", get(browser_list_tabs))
+        .route("/api/browser/:id/tabs/new", post(browser_new_tab))
+        .route("/api/browser/:id/tabs/switch", post(browser_switch_tab))
+        .route("/api/browser/:id/tabs/close", post(browser_close_tab))
+        // Advanced: Cookies
+        .route("/api/browser/:id/cookies", get(browser_get_cookies))
+        .route("/api/browser/:id/cookies/set", post(browser_set_cookie))
+        .route("/api/browser/:id/cookies/clear", post(browser_delete_cookies))
+        // Advanced: Console
+        .route("/api/browser/:id/console", get(browser_get_console_logs))
+        .route("/api/browser/:id/console/enable", post(browser_enable_console))
+        // Advanced: dialog, coordinate click, drag, network log, wait_for_text
+        .route("/api/browser/:id/handle_dialog", post(browser_handle_dialog))
+        .route("/api/browser/:id/click_at", post(browser_click_at))
+        .route("/api/browser/:id/drag", post(browser_drag))
+        .route("/api/browser/:id/network_log", get(browser_network_log))
+        .route("/api/browser/:id/network_log/clear", post(browser_clear_network_log))
+        .route("/api/browser/:id/wait_for_text", post(browser_wait_for_text))
+        // Utility
+        .route("/api/health", get(health))
+        .with_state(state)
+}
+
+// ---------------------------------------------------------------------------
+// Helper: resolve CDP port for a running profile
+// ---------------------------------------------------------------------------
+
+fn require_cdp_port(state: &AppState, profile_id: &str) -> Result<u16, (StatusCode, String)> {
+    state
+        .process_manager
+        .get_cdp_port(profile_id)
+        .ok_or_else(|| {
+            (
+                StatusCode::CONFLICT,
+                serde_json::json!({
+                    "error": "browser_not_running",
+                    "message": format!("Profile {} is not running", profile_id),
+                    "profile_id": profile_id,
+                })
+                .to_string(),
+            )
+        })
+}
+
+// ---------------------------------------------------------------------------
+// Health
+// ---------------------------------------------------------------------------
+
+async fn health() -> &'static str {
+    "ok"
+}
+
+// ---------------------------------------------------------------------------
+// Profile CRUD
+// ---------------------------------------------------------------------------
+
+async fn list_profiles(
+    State(state): State<ApiState>,
+) -> Result<Json<Vec<serde_json::Value>>, (StatusCode, String)> {
+    let config = state.config.read();
+    let profiles: Vec<serde_json::Value> = config
+        .profiles
+        .iter()
+        .map(|p| {
+            let mut v = serde_json::to_value(p).unwrap_or_default();
+            if let Some(obj) = v.as_object_mut() {
+                obj.insert(
+                    "is_running".to_string(),
+                    serde_json::Value::Bool(state.process_manager.is_running(&p.id)),
+                );
+            }
+            v
+        })
+        .collect();
+    Ok(Json(profiles))
+}
+
+async fn get_profile(
+    State(state): State<ApiState>,
+    AxumPath(id): AxumPath<String>,
+) -> Result<Json<BrowserProfile>, (StatusCode, String)> {
+    let config = state.config.read();
+    let profile = config
+        .profiles
+        .iter()
+        .find(|p| p.id == id)
+        .cloned()
+        .ok_or_else(|| (StatusCode::NOT_FOUND, "Profile not found".to_string()))?;
+    Ok(Json(profile))
+}
+
+async fn add_profile(
+    State(state): State<ApiState>,
+    Json(profile): Json<BrowserProfile>,
+) -> Result<(StatusCode, Json<BrowserProfile>), (StatusCode, String)> {
+    validation::validate_profile(&profile).map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+    let mut config = state.config.write();
+    if config.profiles.iter().any(|p| p.id == profile.id) {
+        return Err((
+            StatusCode::CONFLICT,
+            "Profile ID already exists".to_string(),
+        ));
+    }
+    config.profiles.push(profile.clone());
+    crate::config::save_config(&config)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok((StatusCode::CREATED, Json(profile)))
+}
+
+async fn update_profile(
+    State(state): State<ApiState>,
+    AxumPath(id): AxumPath<String>,
+    Json(profile): Json<BrowserProfile>,
+) -> Result<Json<BrowserProfile>, (StatusCode, String)> {
+    if profile.id != id {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "ID in path and body must match".to_string(),
+        ));
+    }
+    validation::validate_profile(&profile).map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+    let mut config = state.config.write();
+    let pos = config
+        .profiles
+        .iter()
+        .position(|p| p.id == id)
+        .ok_or_else(|| (StatusCode::NOT_FOUND, "Profile not found".to_string()))?;
+    config.profiles[pos] = profile.clone();
+    crate::config::save_config(&config)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(Json(profile))
+}
+
+async fn delete_profile(
+    State(state): State<ApiState>,
+    AxumPath(id): AxumPath<String>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    if state.process_manager.is_running(&id) {
+        return Err((
+            StatusCode::CONFLICT,
+            "Cannot delete profile while it is running".to_string(),
+        ));
+    }
+    let mut config = state.config.write();
+    let before = config.profiles.len();
+    config.profiles.retain(|p| p.id != id);
+    if config.profiles.len() == before {
+        return Err((StatusCode::NOT_FOUND, "Profile not found".to_string()));
+    }
+    crate::config::save_config(&config)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+// ---------------------------------------------------------------------------
+// Browser lifecycle
+// ---------------------------------------------------------------------------
+
+#[derive(serde::Serialize)]
+pub struct LaunchResponse {
+    pub pid: u32,
+    pub cdp_port: u16,
+}
+
+async fn launch_profile(
+    State(state): State<ApiState>,
+    AxumPath(profile_id): AxumPath<String>,
+) -> Result<Json<LaunchResponse>, (StatusCode, String)> {
+    let config = state.config.read().clone();
+    let _profile = config
+        .profiles
+        .iter()
+        .find(|p| p.id == profile_id)
+        .ok_or_else(|| (StatusCode::NOT_FOUND, "Profile not found".to_string()))?;
+    if state.process_manager.is_running(&profile_id) {
+        return Err((
+            StatusCode::CONFLICT,
+            "Profile is already running".to_string(),
+        ));
+    }
+    let chrome_path = get_effective_chrome_path_from_config(&config)
+        .await
+        .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+    let (pid, cdp_port) = state
+        .process_manager
+        .launch_profile(&profile_id, &config, &chrome_path)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    {
+        let mut config = state.config.write();
+        config.recent_profiles.retain(|id| id != &profile_id);
+        config.recent_profiles.insert(0, profile_id.clone());
+        if config.recent_profiles.len() > 10 {
+            config.recent_profiles.truncate(10);
+        }
+        let _ = crate::config::save_config(&config);
+    }
+    Ok(Json(LaunchResponse { pid, cdp_port }))
+}
+
+async fn kill_profile(
+    State(state): State<ApiState>,
+    AxumPath(profile_id): AxumPath<String>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    state.session_manager.disconnect(&profile_id).await;
+    state
+        .process_manager
+        .kill_profile(&profile_id)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(serde::Serialize)]
+struct RunningBrowser {
+    profile_id: String,
+    pid: u32,
+    cdp_port: Option<u16>,
+    launched_at: u64,
+}
+
+async fn get_running_browsers(State(state): State<ApiState>) -> Json<Vec<RunningBrowser>> {
+    let ids = state.process_manager.get_running_profiles();
+    let browsers: Vec<RunningBrowser> = ids
+        .iter()
+        .filter_map(|id| {
+            state
+                .process_manager
+                .get_process_info(id)
+                .map(|info| RunningBrowser {
+                    profile_id: info.profile_id,
+                    pid: info.pid,
+                    cdp_port: info.cdp_port,
+                    launched_at: info.launched_at,
+                })
+        })
+        .collect();
+    Json(browsers)
+}
+
+// ---------------------------------------------------------------------------
+// Browser control: request/response types
+// ---------------------------------------------------------------------------
+
+#[derive(serde::Deserialize)]
+struct NavigateReq {
+    url: String,
+}
+
+#[derive(serde::Deserialize)]
+struct ClickReq {
+    selector: String,
+}
+
+#[derive(serde::Deserialize)]
+struct TypeTextReq {
+    selector: String,
+    text: String,
+}
+
+#[derive(serde::Deserialize)]
+struct PressKeyReq {
+    key: String,
+}
+
+#[derive(serde::Deserialize)]
+struct ScrollReq {
+    direction: String,
+    #[serde(default = "default_scroll_amount")]
+    amount: u32,
+}
+
+fn default_scroll_amount() -> u32 {
+    500
+}
+
+#[derive(serde::Deserialize)]
+struct WaitForReq {
+    selector: String,
+    #[serde(default = "default_timeout_ms")]
+    timeout_ms: u64,
+}
+
+fn default_timeout_ms() -> u64 {
+    5000
+}
+
+#[derive(serde::Deserialize)]
+struct ExtractReq {
+    selectors: HashMap<String, String>,
+}
+
+#[derive(serde::Deserialize)]
+struct EvaluateReq {
+    expression: String,
+}
+
+#[derive(serde::Deserialize)]
+struct NavigateWaitReq {
+    url: String,
+    #[serde(default = "default_wait_until")]
+    wait_until: String,
+    #[serde(default = "default_nav_timeout_ms")]
+    timeout_ms: u64,
+}
+
+fn default_wait_until() -> String {
+    "load".to_string()
+}
+
+fn default_nav_timeout_ms() -> u64 {
+    15000
+}
+
+#[derive(serde::Deserialize)]
+struct SlowTypeReq {
+    selector: String,
+    text: String,
+    #[serde(default = "default_key_delay_ms")]
+    delay_ms: u64,
+}
+
+fn default_key_delay_ms() -> u64 {
+    50
+}
+
+#[derive(serde::Deserialize)]
+struct UploadFileReq {
+    selector: String,
+    file_path: String,
+}
+
+#[derive(serde::Deserialize)]
+struct SelectOptionReq {
+    selector: String,
+    value: String,
+}
+
+#[derive(serde::Deserialize)]
+struct WaitForNavReq {
+    #[serde(default = "default_nav_timeout_ms")]
+    timeout_ms: u64,
+}
+
+#[derive(serde::Deserialize)]
+struct RefReq {
+    ref_id: String,
+}
+
+#[derive(serde::Deserialize)]
+struct TypeRefReq {
+    ref_id: String,
+    text: String,
+}
+
+// ---------------------------------------------------------------------------
+// Macro to reduce boilerplate for CDP endpoint error mapping
+// ---------------------------------------------------------------------------
+
+type ApiResult<T> = Result<T, (StatusCode, String)>;
+
+fn cdp_err(e: String) -> (StatusCode, String) {
+    (StatusCode::INTERNAL_SERVER_ERROR, e)
+}
+
+// ---------------------------------------------------------------------------
+// Browser control endpoints
+// ---------------------------------------------------------------------------
+
+async fn browser_navigate(
+    State(state): State<ApiState>,
+    AxumPath(id): AxumPath<String>,
+    Json(req): Json<NavigateReq>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let cdp_port = require_cdp_port(&state, &id)?;
+    let handle = state.session_manager.get_client(&id, cdp_port).await.map_err(cdp_err)?;
+    let client = handle.lock().await;
+    client.navigate(&req.url).await.map_err(cdp_err)?;
+    let url = client.get_url().await.map_err(cdp_err)?;
+    let title = client.get_title().await.map_err(cdp_err)?;
+    Ok(Json(serde_json::json!({ "url": url, "title": title })))
+}
+
+async fn browser_get_url(
+    State(state): State<ApiState>,
+    AxumPath(id): AxumPath<String>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let cdp_port = require_cdp_port(&state, &id)?;
+    let handle = state.session_manager.get_client(&id, cdp_port).await.map_err(cdp_err)?;
+    let client = handle.lock().await;
+    let url = client.get_url().await.map_err(cdp_err)?;
+    Ok(Json(serde_json::json!({ "url": url })))
+}
+
+async fn browser_get_title(
+    State(state): State<ApiState>,
+    AxumPath(id): AxumPath<String>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let cdp_port = require_cdp_port(&state, &id)?;
+    let handle = state.session_manager.get_client(&id, cdp_port).await.map_err(cdp_err)?;
+    let client = handle.lock().await;
+    let title = client.get_title().await.map_err(cdp_err)?;
+    Ok(Json(serde_json::json!({ "title": title })))
+}
+
+async fn browser_go_back(
+    State(state): State<ApiState>,
+    AxumPath(id): AxumPath<String>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let cdp_port = require_cdp_port(&state, &id)?;
+    let handle = state.session_manager.get_client(&id, cdp_port).await.map_err(cdp_err)?;
+    let client = handle.lock().await;
+    client.go_back().await.map_err(cdp_err)?;
+    let url = client.get_url().await.map_err(cdp_err)?;
+    let title = client.get_title().await.map_err(cdp_err)?;
+    Ok(Json(serde_json::json!({ "url": url, "title": title })))
+}
+
+async fn browser_go_forward(
+    State(state): State<ApiState>,
+    AxumPath(id): AxumPath<String>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let cdp_port = require_cdp_port(&state, &id)?;
+    let handle = state.session_manager.get_client(&id, cdp_port).await.map_err(cdp_err)?;
+    let client = handle.lock().await;
+    client.go_forward().await.map_err(cdp_err)?;
+    let url = client.get_url().await.map_err(cdp_err)?;
+    let title = client.get_title().await.map_err(cdp_err)?;
+    Ok(Json(serde_json::json!({ "url": url, "title": title })))
+}
+
+async fn browser_reload(
+    State(state): State<ApiState>,
+    AxumPath(id): AxumPath<String>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let cdp_port = require_cdp_port(&state, &id)?;
+    let handle = state.session_manager.get_client(&id, cdp_port).await.map_err(cdp_err)?;
+    let client = handle.lock().await;
+    client.reload().await.map_err(cdp_err)?;
+    let url = client.get_url().await.map_err(cdp_err)?;
+    let title = client.get_title().await.map_err(cdp_err)?;
+    Ok(Json(serde_json::json!({ "url": url, "title": title })))
+}
+
+async fn browser_navigate_wait(
+    State(state): State<ApiState>,
+    AxumPath(id): AxumPath<String>,
+    Json(req): Json<NavigateWaitReq>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let cdp_port = require_cdp_port(&state, &id)?;
+    let handle = state.session_manager.get_client(&id, cdp_port).await.map_err(cdp_err)?;
+    let client = handle.lock().await;
+    client
+        .navigate_wait(&req.url, &req.wait_until, req.timeout_ms)
+        .await
+        .map_err(cdp_err)?;
+    let url = client.get_url().await.map_err(cdp_err)?;
+    let title = client.get_title().await.map_err(cdp_err)?;
+    Ok(Json(serde_json::json!({ "url": url, "title": title })))
+}
+
+async fn browser_hover(
+    State(state): State<ApiState>,
+    AxumPath(id): AxumPath<String>,
+    Json(req): Json<ClickReq>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let cdp_port = require_cdp_port(&state, &id)?;
+    let handle = state.session_manager.get_client(&id, cdp_port).await.map_err(cdp_err)?;
+    let client = handle.lock().await;
+    client.hover(&req.selector).await.map_err(cdp_err)?;
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+async fn browser_double_click(
+    State(state): State<ApiState>,
+    AxumPath(id): AxumPath<String>,
+    Json(req): Json<ClickReq>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let cdp_port = require_cdp_port(&state, &id)?;
+    let handle = state.session_manager.get_client(&id, cdp_port).await.map_err(cdp_err)?;
+    let client = handle.lock().await;
+    client.double_click(&req.selector).await.map_err(cdp_err)?;
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+async fn browser_right_click(
+    State(state): State<ApiState>,
+    AxumPath(id): AxumPath<String>,
+    Json(req): Json<ClickReq>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let cdp_port = require_cdp_port(&state, &id)?;
+    let handle = state.session_manager.get_client(&id, cdp_port).await.map_err(cdp_err)?;
+    let client = handle.lock().await;
+    client.right_click(&req.selector).await.map_err(cdp_err)?;
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+async fn browser_click(
+    State(state): State<ApiState>,
+    AxumPath(id): AxumPath<String>,
+    Json(req): Json<ClickReq>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let cdp_port = require_cdp_port(&state, &id)?;
+    let handle = state.session_manager.get_client(&id, cdp_port).await.map_err(cdp_err)?;
+    let client = handle.lock().await;
+    client.click(&req.selector).await.map_err(cdp_err)?;
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+async fn browser_type_text(
+    State(state): State<ApiState>,
+    AxumPath(id): AxumPath<String>,
+    Json(req): Json<TypeTextReq>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let cdp_port = require_cdp_port(&state, &id)?;
+    let handle = state.session_manager.get_client(&id, cdp_port).await.map_err(cdp_err)?;
+    let client = handle.lock().await;
+    client.type_text(&req.selector, &req.text).await.map_err(cdp_err)?;
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+async fn browser_press_key(
+    State(state): State<ApiState>,
+    AxumPath(id): AxumPath<String>,
+    Json(req): Json<PressKeyReq>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let cdp_port = require_cdp_port(&state, &id)?;
+    let handle = state.session_manager.get_client(&id, cdp_port).await.map_err(cdp_err)?;
+    let client = handle.lock().await;
+    client.press_key(&req.key).await.map_err(cdp_err)?;
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+async fn browser_slow_type(
+    State(state): State<ApiState>,
+    AxumPath(id): AxumPath<String>,
+    Json(req): Json<SlowTypeReq>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let cdp_port = require_cdp_port(&state, &id)?;
+    let handle = state.session_manager.get_client(&id, cdp_port).await.map_err(cdp_err)?;
+    let client = handle.lock().await;
+    client
+        .slow_type(&req.selector, &req.text, req.delay_ms)
+        .await
+        .map_err(cdp_err)?;
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+async fn browser_upload_file(
+    State(state): State<ApiState>,
+    AxumPath(id): AxumPath<String>,
+    Json(req): Json<UploadFileReq>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let cdp_port = require_cdp_port(&state, &id)?;
+    let handle = state.session_manager.get_client(&id, cdp_port).await.map_err(cdp_err)?;
+    let client = handle.lock().await;
+    client
+        .upload_file(&req.selector, vec![req.file_path.clone()])
+        .await
+        .map_err(cdp_err)?;
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+async fn browser_wait_for_navigation(
+    State(state): State<ApiState>,
+    AxumPath(id): AxumPath<String>,
+    Json(req): Json<WaitForNavReq>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let cdp_port = require_cdp_port(&state, &id)?;
+    let handle = state.session_manager.get_client(&id, cdp_port).await.map_err(cdp_err)?;
+    let client = handle.lock().await;
+    client
+        .wait_for_navigation(req.timeout_ms)
+        .await
+        .map_err(cdp_err)?;
+    let url = client.get_url().await.map_err(cdp_err)?;
+    let title = client.get_title().await.map_err(cdp_err)?;
+    Ok(Json(serde_json::json!({ "url": url, "title": title })))
+}
+
+async fn browser_ax_tree(
+    State(state): State<ApiState>,
+    AxumPath(id): AxumPath<String>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let cdp_port = require_cdp_port(&state, &id)?;
+    let handle = state.session_manager.get_client(&id, cdp_port).await.map_err(cdp_err)?;
+    let client = handle.lock().await;
+    let nodes = client.get_ax_tree().await.map_err(cdp_err)?;
+    let value = serde_json::to_value(nodes)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(Json(value))
+}
+
+async fn browser_page_state(
+    State(state): State<ApiState>,
+    AxumPath(id): AxumPath<String>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let cdp_port = require_cdp_port(&state, &id)?;
+    let handle = state.session_manager.get_client(&id, cdp_port).await.map_err(cdp_err)?;
+    let client = handle.lock().await;
+    let state_val = client.get_page_state().await.map_err(cdp_err)?;
+    let value = serde_json::to_value(state_val)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(Json(value))
+}
+
+async fn browser_click_ref(
+    State(state): State<ApiState>,
+    AxumPath(id): AxumPath<String>,
+    Json(req): Json<RefReq>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let cdp_port = require_cdp_port(&state, &id)?;
+    let handle = state.session_manager.get_client(&id, cdp_port).await.map_err(cdp_err)?;
+    let client = handle.lock().await;
+    client.click_ref(&req.ref_id).await.map_err(cdp_err)?;
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+async fn browser_type_ref(
+    State(state): State<ApiState>,
+    AxumPath(id): AxumPath<String>,
+    Json(req): Json<TypeRefReq>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let cdp_port = require_cdp_port(&state, &id)?;
+    let handle = state.session_manager.get_client(&id, cdp_port).await.map_err(cdp_err)?;
+    let client = handle.lock().await;
+    client.type_ref(&req.ref_id, &req.text).await.map_err(cdp_err)?;
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+async fn browser_focus_ref(
+    State(state): State<ApiState>,
+    AxumPath(id): AxumPath<String>,
+    Json(req): Json<RefReq>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let cdp_port = require_cdp_port(&state, &id)?;
+    let handle = state.session_manager.get_client(&id, cdp_port).await.map_err(cdp_err)?;
+    let client = handle.lock().await;
+    client.focus_ref(&req.ref_id).await.map_err(cdp_err)?;
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+async fn browser_scroll_into_view(
+    State(state): State<ApiState>,
+    AxumPath(id): AxumPath<String>,
+    Json(req): Json<ClickReq>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let cdp_port = require_cdp_port(&state, &id)?;
+    let handle = state.session_manager.get_client(&id, cdp_port).await.map_err(cdp_err)?;
+    let client = handle.lock().await;
+    client.scroll_into_view(&req.selector).await.map_err(cdp_err)?;
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+async fn browser_select_option(
+    State(state): State<ApiState>,
+    AxumPath(id): AxumPath<String>,
+    Json(req): Json<SelectOptionReq>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let cdp_port = require_cdp_port(&state, &id)?;
+    let handle = state.session_manager.get_client(&id, cdp_port).await.map_err(cdp_err)?;
+    let client = handle.lock().await;
+    client.select_option(&req.selector, &req.value).await.map_err(cdp_err)?;
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+async fn browser_scroll(
+    State(state): State<ApiState>,
+    AxumPath(id): AxumPath<String>,
+    Json(req): Json<ScrollReq>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let cdp_port = require_cdp_port(&state, &id)?;
+    let handle = state.session_manager.get_client(&id, cdp_port).await.map_err(cdp_err)?;
+    let client = handle.lock().await;
+    client.scroll(&req.direction, req.amount).await.map_err(cdp_err)?;
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+async fn browser_wait_for(
+    State(state): State<ApiState>,
+    AxumPath(id): AxumPath<String>,
+    Json(req): Json<WaitForReq>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let cdp_port = require_cdp_port(&state, &id)?;
+    let handle = state.session_manager.get_client(&id, cdp_port).await.map_err(cdp_err)?;
+    let client = handle.lock().await;
+    client
+        .wait_for_element(&req.selector, req.timeout_ms)
+        .await
+        .map_err(cdp_err)?;
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+/// Query params for screenshot
+#[derive(serde::Deserialize, Default)]
+struct ScreenshotQuery {
+    full_page: Option<bool>,
+    format: Option<String>,
+    quality: Option<u32>,
+}
+
+async fn browser_screenshot(
+    State(state): State<ApiState>,
+    AxumPath(id): AxumPath<String>,
+    axum::extract::Query(q): axum::extract::Query<ScreenshotQuery>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let cdp_port = require_cdp_port(&state, &id)?;
+    let handle = state.session_manager.get_client(&id, cdp_port).await.map_err(cdp_err)?;
+    let client = handle.lock().await;
+    let format = q.format.as_deref().unwrap_or("png");
+    let image = client
+        .screenshot(q.full_page.unwrap_or(false), format, q.quality)
+        .await
+        .map_err(cdp_err)?;
+    Ok(Json(serde_json::json!({ "image": image, "format": format })))
+}
+
+async fn browser_dom_context(
+    State(state): State<ApiState>,
+    AxumPath(id): AxumPath<String>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let cdp_port = require_cdp_port(&state, &id)?;
+    let handle = state.session_manager.get_client(&id, cdp_port).await.map_err(cdp_err)?;
+    let client = handle.lock().await;
+    let ctx = client.get_dom_context().await.map_err(cdp_err)?;
+    let value =
+        serde_json::to_value(ctx).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(Json(value))
+}
+
+async fn browser_extract(
+    State(state): State<ApiState>,
+    AxumPath(id): AxumPath<String>,
+    Json(req): Json<ExtractReq>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let cdp_port = require_cdp_port(&state, &id)?;
+    let handle = state.session_manager.get_client(&id, cdp_port).await.map_err(cdp_err)?;
+    let client = handle.lock().await;
+    let data = client.extract_data(&req.selectors).await.map_err(cdp_err)?;
+    Ok(Json(data))
+}
+
+async fn browser_evaluate(
+    State(state): State<ApiState>,
+    AxumPath(id): AxumPath<String>,
+    Json(req): Json<EvaluateReq>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let cdp_port = require_cdp_port(&state, &id)?;
+    let handle = state.session_manager.get_client(&id, cdp_port).await.map_err(cdp_err)?;
+    let client = handle.lock().await;
+    let result = client.evaluate_js(&req.expression).await.map_err(cdp_err)?;
+    Ok(Json(serde_json::json!({ "result": result })))
+}
+
+// ---------------------------------------------------------------------------
+// Advanced: Tabs
+// ---------------------------------------------------------------------------
+
+#[derive(serde::Deserialize)]
+struct NewTabReq {
+    #[serde(default = "default_new_tab_url")]
+    url: String,
+}
+
+fn default_new_tab_url() -> String {
+    "about:blank".to_string()
+}
+
+#[derive(serde::Deserialize)]
+struct TabIdReq {
+    target_id: String,
+}
+
+async fn browser_list_tabs(
+    State(state): State<ApiState>,
+    AxumPath(id): AxumPath<String>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let cdp_port = require_cdp_port(&state, &id)?;
+    let handle = state.session_manager.get_client(&id, cdp_port).await.map_err(cdp_err)?;
+    let client = handle.lock().await;
+    let tabs = client.list_tabs().await.map_err(cdp_err)?;
+    let value = serde_json::to_value(tabs)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(Json(value))
+}
+
+async fn browser_new_tab(
+    State(state): State<ApiState>,
+    AxumPath(id): AxumPath<String>,
+    Json(req): Json<NewTabReq>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let cdp_port = require_cdp_port(&state, &id)?;
+    let handle = state.session_manager.get_client(&id, cdp_port).await.map_err(cdp_err)?;
+    let client = handle.lock().await;
+    let tab = client.new_tab(&req.url).await.map_err(cdp_err)?;
+    let value = serde_json::to_value(tab)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(Json(value))
+}
+
+async fn browser_switch_tab(
+    State(state): State<ApiState>,
+    AxumPath(id): AxumPath<String>,
+    Json(req): Json<TabIdReq>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let cdp_port = require_cdp_port(&state, &id)?;
+    let handle = state.session_manager.get_client(&id, cdp_port).await.map_err(cdp_err)?;
+    let client = handle.lock().await;
+    client.switch_tab(&req.target_id).await.map_err(cdp_err)?;
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+async fn browser_close_tab(
+    State(state): State<ApiState>,
+    AxumPath(id): AxumPath<String>,
+    Json(req): Json<TabIdReq>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let cdp_port = require_cdp_port(&state, &id)?;
+    let handle = state.session_manager.get_client(&id, cdp_port).await.map_err(cdp_err)?;
+    let client = handle.lock().await;
+    client.close_tab(&req.target_id).await.map_err(cdp_err)?;
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+// ---------------------------------------------------------------------------
+// Advanced: Cookies
+// ---------------------------------------------------------------------------
+
+#[derive(serde::Deserialize)]
+struct SetCookieReq {
+    name: String,
+    value: String,
+    domain: String,
+    #[serde(default = "default_cookie_path")]
+    path: String,
+}
+
+fn default_cookie_path() -> String {
+    "/".to_string()
+}
+
+async fn browser_get_cookies(
+    State(state): State<ApiState>,
+    AxumPath(id): AxumPath<String>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let cdp_port = require_cdp_port(&state, &id)?;
+    let handle = state.session_manager.get_client(&id, cdp_port).await.map_err(cdp_err)?;
+    let client = handle.lock().await;
+    let cookies = client.get_cookies().await.map_err(cdp_err)?;
+    let value = serde_json::to_value(cookies)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(Json(value))
+}
+
+async fn browser_set_cookie(
+    State(state): State<ApiState>,
+    AxumPath(id): AxumPath<String>,
+    Json(req): Json<SetCookieReq>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let cdp_port = require_cdp_port(&state, &id)?;
+    let handle = state.session_manager.get_client(&id, cdp_port).await.map_err(cdp_err)?;
+    let client = handle.lock().await;
+    client
+        .set_cookie(&req.name, &req.value, &req.domain, &req.path)
+        .await
+        .map_err(cdp_err)?;
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+async fn browser_delete_cookies(
+    State(state): State<ApiState>,
+    AxumPath(id): AxumPath<String>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let cdp_port = require_cdp_port(&state, &id)?;
+    let handle = state.session_manager.get_client(&id, cdp_port).await.map_err(cdp_err)?;
+    let client = handle.lock().await;
+    client.delete_cookies().await.map_err(cdp_err)?;
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+// ---------------------------------------------------------------------------
+// Advanced: Console
+// ---------------------------------------------------------------------------
+
+async fn browser_get_console_logs(
+    State(state): State<ApiState>,
+    AxumPath(id): AxumPath<String>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let cdp_port = require_cdp_port(&state, &id)?;
+    let handle = state.session_manager.get_client(&id, cdp_port).await.map_err(cdp_err)?;
+    let client = handle.lock().await;
+    let logs = client.get_console_logs().await.map_err(cdp_err)?;
+    Ok(Json(serde_json::json!({ "logs": logs })))
+}
+
+async fn browser_enable_console(
+    State(state): State<ApiState>,
+    AxumPath(id): AxumPath<String>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let cdp_port = require_cdp_port(&state, &id)?;
+    let handle = state.session_manager.get_client(&id, cdp_port).await.map_err(cdp_err)?;
+    let client = handle.lock().await;
+    client.enable_console_capture().await.map_err(cdp_err)?;
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+// ---------------------------------------------------------------------------
+// New handlers: dialog, click_at, drag, network_log, wait_for_text
+// ---------------------------------------------------------------------------
+
+#[derive(serde::Deserialize)]
+struct HandleDialogReq {
+    action: String,           // "accept" | "dismiss"
+    prompt_text: Option<String>,
+}
+
+async fn browser_handle_dialog(
+    State(state): State<ApiState>,
+    AxumPath(id): AxumPath<String>,
+    Json(body): Json<HandleDialogReq>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let cdp_port = require_cdp_port(&state, &id)?;
+    let handle = state.session_manager.get_client(&id, cdp_port).await.map_err(cdp_err)?;
+    let client = handle.lock().await;
+    client
+        .handle_dialog(&body.action, body.prompt_text.as_deref())
+        .await
+        .map_err(cdp_err)?;
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+#[derive(serde::Deserialize)]
+struct ClickAtReq {
+    x: f64,
+    y: f64,
+}
+
+async fn browser_click_at(
+    State(state): State<ApiState>,
+    AxumPath(id): AxumPath<String>,
+    Json(body): Json<ClickAtReq>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let cdp_port = require_cdp_port(&state, &id)?;
+    let handle = state.session_manager.get_client(&id, cdp_port).await.map_err(cdp_err)?;
+    let client = handle.lock().await;
+    client.click_at(body.x, body.y).await.map_err(cdp_err)?;
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+#[derive(serde::Deserialize)]
+struct DragReq {
+    from_selector: String,
+    to_selector: String,
+}
+
+async fn browser_drag(
+    State(state): State<ApiState>,
+    AxumPath(id): AxumPath<String>,
+    Json(body): Json<DragReq>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let cdp_port = require_cdp_port(&state, &id)?;
+    let handle = state.session_manager.get_client(&id, cdp_port).await.map_err(cdp_err)?;
+    let client = handle.lock().await;
+    client.drag(&body.from_selector, &body.to_selector).await.map_err(cdp_err)?;
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+async fn browser_network_log(
+    State(state): State<ApiState>,
+    AxumPath(id): AxumPath<String>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let cdp_port = require_cdp_port(&state, &id)?;
+    let handle = state.session_manager.get_client(&id, cdp_port).await.map_err(cdp_err)?;
+    let client = handle.lock().await;
+    let log = client.get_network_log().await;
+    Ok(Json(serde_json::json!({ "entries": log, "count": log.len() })))
+}
+
+async fn browser_clear_network_log(
+    State(state): State<ApiState>,
+    AxumPath(id): AxumPath<String>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let cdp_port = require_cdp_port(&state, &id)?;
+    let handle = state.session_manager.get_client(&id, cdp_port).await.map_err(cdp_err)?;
+    let client = handle.lock().await;
+    client.clear_network_log().await;
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+#[derive(serde::Deserialize)]
+struct WaitForTextReq {
+    text: String,
+    timeout_ms: Option<u64>,
+}
+
+async fn browser_wait_for_text(
+    State(state): State<ApiState>,
+    AxumPath(id): AxumPath<String>,
+    Json(body): Json<WaitForTextReq>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let cdp_port = require_cdp_port(&state, &id)?;
+    let handle = state.session_manager.get_client(&id, cdp_port).await.map_err(cdp_err)?;
+    let client = handle.lock().await;
+    client
+        .wait_for_text(&body.text, body.timeout_ms.unwrap_or(30000))
+        .await
+        .map_err(cdp_err)?;
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+// ---------------------------------------------------------------------------
+// Server
+// ---------------------------------------------------------------------------
+
+/// Build the full API app (router + optional API key auth + CORS).
+/// Used by run_server and by integration tests to exercise API key middleware.
+pub fn app(state: ApiState, api_key: Option<String>) -> Router {
+    let base_router = router(state);
+    let app = if let Some(key) = api_key {
+        base_router
+            .route_layer(middleware::from_fn_with_state(key, api_key_auth))
+    } else {
+        base_router
+    }
+    .layer(
+        tower_http::cors::CorsLayer::new()
+            .allow_origin(tower_http::cors::Any)
+            .allow_methods([
+                axum::http::Method::GET,
+                axum::http::Method::POST,
+                axum::http::Method::PUT,
+                axum::http::Method::DELETE,
+            ])
+            .allow_headers([axum::http::header::CONTENT_TYPE, "X-API-Key".parse().unwrap()]),
+    );
+    app
+}
+
+pub async fn run_server(state: ApiState, port: u16, api_key: Option<String>) -> Result<(), String> {
+    let listener = tokio::net::TcpListener::bind(format!("127.0.0.1:{}", port))
+        .await
+        .map_err(|e| format!("Failed to bind API port {}: {}", port, e))?;
+    let app = app(state, api_key);
+    tracing::info!("Browsion API listening on http://127.0.0.1:{}", port);
+    axum::serve(listener, app)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}

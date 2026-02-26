@@ -916,40 +916,50 @@ impl CDPClient {
     // ── File upload ─────────────────────────────────────────────────
 
     /// Upload a file to an `<input type="file">` element.
-    pub async fn upload_file(&self, selector: &str, file_path: &str) -> Result<(), String> {
-        let doc_result = self
-            .send_command("DOM.getDocument", json!({"depth": 0, "pierce": true}))
-            .await?;
-        let doc_node_id = doc_result
-            .get("result")
-            .and_then(|r| r.get("root"))
-            .and_then(|r| r.get("nodeId"))
-            .and_then(|v| v.as_i64())
-            .ok_or("Failed to get document nodeId")?;
+    pub async fn upload_file(&self, selector: &str, file_paths: Vec<String>) -> Result<(), String> {
+        let selector_json = serde_json::to_string(selector).unwrap_or_default();
+        // Step 1: resolve element via deep shadow DOM JS query
+        let js = format!(r#"(function() {{
+            function deepQuery(root, sel) {{
+                let el = root.querySelector(sel);
+                if (el) return el;
+                for (const host of root.querySelectorAll('*')) {{
+                    if (host.shadowRoot) {{
+                        const found = deepQuery(host.shadowRoot, sel);
+                        if (found) return found;
+                    }}
+                }}
+                return null;
+            }}
+            return deepQuery(document, {selector_json});
+        }})()"#);
 
-        let query_result = self
-            .send_command(
-                "DOM.querySelector",
-                json!({"nodeId": doc_node_id, "selector": selector}),
-            )
-            .await?;
-        let node_id = query_result
-            .get("result")
-            .and_then(|r| r.get("nodeId"))
-            .and_then(|v| v.as_i64())
-            .ok_or_else(|| format!("File input not found: {}", selector))?;
+        let result = self.send_command("Runtime.evaluate", json!({
+            "expression": js,
+            "returnByValue": false,
+        })).await?;
 
-        if node_id == 0 {
-            return Err(format!("File input not found: {}", selector));
-        }
+        let object_id = result["result"]["result"]["objectId"]
+            .as_str()
+            .ok_or_else(|| format!("upload_file: element not found for selector '{}'", selector))?
+            .to_string();
 
-        self.send_command(
-            "DOM.setFileInputFiles",
-            json!({"nodeId": node_id, "files": [file_path]}),
-        )
-        .await?;
+        // Step 2: get backendNodeId from objectId
+        let describe_result = self.send_command("DOM.describeNode", json!({
+            "objectId": object_id,
+        })).await?;
 
-        tracing::debug!("Uploaded file '{}' to: {}", file_path, selector);
+        let backend_node_id = describe_result["result"]["node"]["backendNodeId"]
+            .as_i64()
+            .ok_or("upload_file: could not get backendNodeId")?;
+
+        // Step 3: set files via backendNodeId
+        self.send_command("DOM.setFileInputFiles", json!({
+            "backendNodeId": backend_node_id,
+            "files": file_paths,
+        })).await?;
+
+        tracing::debug!("Uploaded files to: {}", selector);
         Ok(())
     }
 
