@@ -1,27 +1,28 @@
 import React, { useState, useEffect } from 'react';
 import { tauriApi } from '../api/tauri';
-import type { BrowserProfile } from '../types/profile';
+import type { BrowserProfile, BrowserSource } from '../types/profile';
 import { v4 as uuidv4 } from 'uuid';
 import ISO6391 from 'iso-639-1';
 import { LaunchArgsSelector, ARG_CATEGORIES } from './LaunchArgsSelector';
 
-// Get all IANA timezones from browser's Intl API
-const getAllTimezones = (): string[] => {
-  try {
-    // Modern browsers support this (Chrome 99+, Firefox 93+, Safari 15.4+)
-    // @ts-ignore
-    return Intl.supportedValuesOf('timeZone') as string[];
-  } catch {
-    // Fallback: common timezones
-    return [
-      'UTC',
-      'America/New_York', 'America/Chicago', 'America/Denver', 'America/Los_Angeles',
-      'Europe/London', 'Europe/Paris', 'Europe/Berlin',
-      'Asia/Shanghai', 'Asia/Tokyo', 'Asia/Seoul', 'Asia/Singapore',
-      'Australia/Sydney',
-    ];
-  }
-};
+// Common timezones for fingerprint-chromium (--timezone). See https://github.com/adryfish/fingerprint-chromium
+const TIMEZONES: { value: string; label: string }[] = [
+  { value: '', label: '— Default / system —' },
+  { value: 'UTC', label: 'UTC' },
+  { value: 'America/New_York', label: 'America/New York' },
+  { value: 'America/Los_Angeles', label: 'America/Los Angeles' },
+  { value: 'America/Chicago', label: 'America/Chicago' },
+  { value: 'America/Denver', label: 'America/Denver' },
+  { value: 'Europe/London', label: 'Europe/London' },
+  { value: 'Europe/Paris', label: 'Europe/Paris' },
+  { value: 'Europe/Berlin', label: 'Europe/Berlin' },
+  { value: 'Asia/Shanghai', label: 'Asia/Shanghai' },
+  { value: 'Asia/Hong_Kong', label: 'Asia/Hong Kong' },
+  { value: 'Asia/Tokyo', label: 'Asia/Tokyo' },
+  { value: 'Asia/Singapore', label: 'Asia/Singapore' },
+  { value: 'Australia/Sydney', label: 'Australia/Sydney' },
+  { value: 'Asia/Kolkata', label: 'Asia/Kolkata' },
+];
 
 // Generate locale list from ISO-639-1 + common country codes
 const getAllLocales = (): { code: string; name: string }[] => {
@@ -78,8 +79,6 @@ const getAllLocales = (): { code: string; name: string }[] => {
   return locales;
 };
 
-// Memoized lists
-const TIMEZONES = getAllTimezones();
 const LANGUAGES = getAllLocales();
 
 interface ProfileFormProps {
@@ -100,15 +99,18 @@ export const ProfileForm: React.FC<ProfileFormProps> = ({
     user_data_dir: '',
     proxy_server: '',
     lang: 'en-US',
-    timezone: '',
-    fingerprint: '',
     color: '#3498DB',
     custom_args: [],
     tags: [],
   });
   const [tagsText, setTagsText] = useState('');
+  const [customArgsText, setCustomArgsText] = useState('');
+  const [browserSource, setBrowserSource] = useState<BrowserSource | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const isFingerprintChromium =
+    browserSource?.type === 'custom' && browserSource?.fingerprint_chromium;
 
   // Parse custom_args into preset args (matching our selector) and additional args
   const getPresetArgs = (): string[] => {
@@ -140,13 +142,24 @@ export const ProfileForm: React.FC<ProfileFormProps> = ({
   };
 
   useEffect(() => {
+       tauriApi.getBrowserSource().then(setBrowserSource).catch(() => setBrowserSource(null));
+  }, []);
+
+  useEffect(() => {
     if (profile) {
-      // If ID is empty, this is a clone operation, generate new ID
       const profileData = profile.id ? profile : { ...profile, id: uuidv4() };
       setFormData(profileData);
       setTagsText((profile.tags || []).join(', '));
+      const presetSet = new Set(
+        ARG_CATEGORIES.flatMap((cat) => cat.args.map((a) => a.arg))
+      );
+      const additional = (profileData.custom_args || []).filter(
+        (arg) => !presetSet.has(arg)
+      );
+      setCustomArgsText(additional.join('\n'));
     } else {
       setFormData((prev) => ({ ...prev, id: uuidv4() }));
+      setCustomArgsText('');
     }
   }, [profile]);
 
@@ -162,13 +175,18 @@ export const ProfileForm: React.FC<ProfileFormProps> = ({
         .map((t) => t.trim())
         .filter((t) => t.length > 0);
 
+      const additionalArgs = customArgsText
+        .split('\n')
+        .map((line) => line.trim())
+        .filter((line) => line.length > 0);
       const profileData: BrowserProfile = {
         ...formData,
         proxy_server: formData.proxy_server || undefined,
-        timezone: formData.timezone || undefined,
-        fingerprint: formData.fingerprint || undefined,
         color: formData.color || undefined,
         tags,
+        custom_args: [...getPresetArgs(), ...additionalArgs],
+        timezone: formData.timezone || undefined,
+        fingerprint: formData.fingerprint || undefined,
       };
 
       // If original profile has no ID or is a clone, treat as new
@@ -246,23 +264,44 @@ export const ProfileForm: React.FC<ProfileFormProps> = ({
 
                 <div className="form-row">
                   <div className="form-group">
-                    <label htmlFor="lang">Language</label>
-                    <input
-                      type="text"
-                      id="lang"
-                      name="lang"
-                      value={formData.lang}
-                      onChange={handleChange}
-                      list="lang-list"
-                      placeholder="en-US"
-                    />
-                    <datalist id="lang-list">
-                      {LANGUAGES.map((lang) => (
-                        <option key={lang.code} value={lang.code}>
-                          {lang.name}
-                        </option>
-                      ))}
-                    </datalist>
+                    <label htmlFor="lang">
+                      Language{isFingerprintChromium ? ' (--lang)' : ''}
+                    </label>
+                    {isFingerprintChromium ? (
+                      <select
+                        id="lang"
+                        name="lang"
+                        value={formData.lang}
+                        onChange={(e) =>
+                          setFormData((prev) => ({ ...prev, lang: e.target.value }))
+                        }
+                      >
+                        {LANGUAGES.map((lang) => (
+                          <option key={lang.code} value={lang.code}>
+                            {lang.name}
+                          </option>
+                        ))}
+                      </select>
+                    ) : (
+                      <>
+                        <input
+                          type="text"
+                          id="lang"
+                          name="lang"
+                          value={formData.lang}
+                          onChange={handleChange}
+                          list="lang-list"
+                          placeholder="en-US"
+                        />
+                        <datalist id="lang-list">
+                          {LANGUAGES.map((lang) => (
+                            <option key={lang.code} value={lang.code}>
+                              {lang.name}
+                            </option>
+                          ))}
+                        </datalist>
+                      </>
+                    )}
                   </div>
 
                   <div className="form-group">
@@ -277,6 +316,47 @@ export const ProfileForm: React.FC<ProfileFormProps> = ({
                   </div>
                 </div>
 
+                {isFingerprintChromium && (
+                  <div className="form-row">
+                    <div className="form-group">
+                      <label htmlFor="fingerprint">Fingerprint (--fingerprint)</label>
+                      <input
+                        type="text"
+                        id="fingerprint"
+                        name="fingerprint"
+                        value={formData.fingerprint ?? ''}
+                        onChange={(e) =>
+                          setFormData((prev) => ({
+                            ...prev,
+                            fingerprint: e.target.value.trim() || undefined,
+                          }))
+                        }
+                        placeholder="e.g. 1000 (32-bit integer seed)"
+                      />
+                    </div>
+                    <div className="form-group">
+                      <label htmlFor="timezone">Timezone (--timezone)</label>
+                      <select
+                        id="timezone"
+                        name="timezone"
+                        value={formData.timezone ?? ''}
+                        onChange={(e) =>
+                          setFormData((prev) => ({
+                            ...prev,
+                            timezone: e.target.value || undefined,
+                          }))
+                        }
+                      >
+                        {TIMEZONES.map((tz) => (
+                          <option key={tz.value || 'default'} value={tz.value}>
+                            {tz.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+                )}
+
                 <div className="form-group">
                   <label htmlFor="proxy_server">Proxy Server</label>
                   <input
@@ -287,38 +367,6 @@ export const ProfileForm: React.FC<ProfileFormProps> = ({
                     onChange={handleChange}
                     placeholder="http://192.168.0.220:8889"
                   />
-                </div>
-
-                <div className="form-row">
-                  <div className="form-group">
-                    <label htmlFor="timezone">Timezone</label>
-                    <input
-                      type="text"
-                      id="timezone"
-                      name="timezone"
-                      value={formData.timezone || ''}
-                      onChange={handleChange}
-                      list="timezone-list"
-                      placeholder="America/Los_Angeles"
-                    />
-                    <datalist id="timezone-list">
-                      {TIMEZONES.map((tz) => (
-                        <option key={tz} value={tz} />
-                      ))}
-                    </datalist>
-                  </div>
-
-                  <div className="form-group">
-                    <label htmlFor="fingerprint">Fingerprint</label>
-                    <input
-                      type="text"
-                      id="fingerprint"
-                      name="fingerprint"
-                      value={formData.fingerprint}
-                      onChange={handleChange}
-                      placeholder="10000"
-                    />
-                  </div>
                 </div>
               </div>
 
@@ -349,20 +397,11 @@ export const ProfileForm: React.FC<ProfileFormProps> = ({
                   <label htmlFor="custom_args">Custom Arguments (one per line)</label>
                   <textarea
                     id="custom_args"
-                    value={getAdditionalArgs()}
-                    onChange={(e) => {
-                      const additionalArgs = e.target.value
-                        .split('\n')
-                        .map((line) => line.trim())
-                        .filter((line) => line.length > 0);
-                      const presetArgs = getPresetArgs();
-                      setFormData((prev) => ({
-                        ...prev,
-                        custom_args: [...presetArgs, ...additionalArgs],
-                      }));
-                    }}
+                    value={customArgsText}
+                    onChange={(e) => setCustomArgsText(e.target.value)}
                     placeholder="--custom-arg=value&#10;--another-flag"
                     rows={3}
+                    className="custom-args-textarea"
                   />
                 </div>
               </div>
