@@ -127,6 +127,8 @@ impl CDPClient {
 
     /// Connect to the CDP WebSocket endpoint for the current `cdp_port`.
     /// Polls `/json/list`, finds the first "page" target, and connects.
+    /// Connect to Chrome via the browser-level WebSocket (Flatten Mode).
+    /// Polls `/json/version` for the browser WS URL, attaches to first page target.
     async fn connect_websocket(&mut self) -> Result<(), String> {
         let mut retries = 0u32;
         const MAX_RETRIES: u32 = 30;
@@ -135,47 +137,126 @@ impl CDPClient {
         while retries < MAX_RETRIES {
             tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
 
-            let list_url = format!("http://localhost:{}/json/list", self.cdp_port);
-            match reqwest::get(&list_url).await {
-                Ok(response) if response.status().is_success() => {
-                    match response.json::<serde_json::Value>().await {
-                        Ok(targets) => {
-                            let page_target = targets
-                                .as_array()
-                                .and_then(|arr| {
-                                    arr.iter().find(|t| {
-                                        t.get("type").and_then(|v| v.as_str()) == Some("page")
-                                    })
-                                });
-
-                            if let Some(target) = page_target {
-                                if let Some(ws_url) =
-                                    target.get("webSocketDebuggerUrl").and_then(|v| v.as_str())
-                                {
-                                    return self.setup_ws_connection(ws_url).await;
-                                } else {
-                                    last_error =
-                                        "No webSocketDebuggerUrl in page target".to_string();
-                                }
-                            } else {
-                                last_error = "No page target found".to_string();
-                            }
-                        }
-                        Err(e) => {
-                            last_error = format!("Failed to parse targets response: {}", e);
-                        }
-                    }
-                }
-                Ok(response) => {
-                    last_error = format!("HTTP error: {}", response.status());
+            // Step 1: get browser-level WS URL from /json/version
+            let version_url = format!("http://localhost:{}/json/version", self.cdp_port);
+            let version_resp = match reqwest::get(&version_url).await {
+                Ok(r) if r.status().is_success() => r,
+                Ok(r) => {
+                    last_error = format!("HTTP {}", r.status());
+                    retries += 1;
+                    continue;
                 }
                 Err(e) => {
                     last_error = format!("Connection error: {}", e);
+                    retries += 1;
+                    continue;
                 }
+            };
+
+            let version: serde_json::Value = match version_resp.json().await {
+                Ok(v) => v,
+                Err(e) => {
+                    last_error = format!("Parse error: {}", e);
+                    retries += 1;
+                    continue;
+                }
+            };
+
+            let browser_ws_url = match version
+                .get("webSocketDebuggerUrl")
+                .and_then(|v| v.as_str())
+            {
+                Some(url) => url.to_string(),
+                None => {
+                    last_error = "No webSocketDebuggerUrl in /json/version".to_string();
+                    retries += 1;
+                    continue;
+                }
+            };
+
+            // Step 2: connect WebSocket + start reader
+            self.setup_ws_connection(&browser_ws_url).await?;
+
+            // Step 3: enable target discovery
+            self.send_browser_command("Target.setDiscoverTargets", json!({"discover": true}))
+                .await
+                .map_err(|e| format!("setDiscoverTargets failed: {}", e))?;
+
+            // Step 4: get existing targets
+            let targets_resp = self
+                .send_browser_command("Target.getTargets", json!({}))
+                .await
+                .map_err(|e| format!("getTargets failed: {}", e))?;
+
+            let target_infos = targets_resp["result"]["targetInfos"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default();
+
+            // Step 5: find the first page target
+            let page_target = target_infos
+                .iter()
+                .find(|t| t["type"].as_str() == Some("page"));
+
+            let target_id = match page_target {
+                Some(t) => t["targetId"].as_str().unwrap_or("").to_string(),
+                None => {
+                    last_error = "No page target found".to_string();
+                    retries += 1;
+                    continue;
+                }
+            };
+
+            if target_id.is_empty() {
+                last_error = "Empty target_id".to_string();
+                retries += 1;
+                continue;
             }
 
-            retries += 1;
-            tracing::debug!("Retry {}/{}: {}", retries, MAX_RETRIES, last_error);
+            // Step 6: attach to the page target with flatten mode
+            let attach_resp = self
+                .send_browser_command(
+                    "Target.attachToTarget",
+                    json!({"targetId": target_id, "flatten": true}),
+                )
+                .await
+                .map_err(|e| format!("attachToTarget failed: {}", e))?;
+
+            let session_id = match attach_resp["result"]["sessionId"].as_str() {
+                Some(s) => s.to_string(),
+                None => {
+                    last_error = "No sessionId from attachToTarget".to_string();
+                    retries += 1;
+                    continue;
+                }
+            };
+
+            // Step 7: register tab + set active
+            {
+                let mut reg = self.tab_registry.lock().await;
+                let url = page_target
+                    .and_then(|t| t["url"].as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let mut tab = TabState::default();
+                tab.session_id = session_id;
+                tab.url = url;
+                reg.insert(target_id.clone(), tab);
+            }
+            *self.active_target_id.lock().await = target_id.clone();
+
+            // Step 8: enable CDP domains in this session
+            self.send_command("Page.enable", json!({})).await?;
+            self.send_command("Runtime.enable", json!({})).await?;
+            self.send_command("Network.enable", json!({})).await?;
+            self.send_command("Log.enable", json!({})).await?;
+
+            tracing::info!(
+                "CDP flatten mode connected for profile {} (target: {})",
+                self.profile_id,
+                target_id
+            );
+            return Ok(());
         }
 
         Err(format!(
