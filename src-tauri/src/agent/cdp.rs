@@ -1787,6 +1787,7 @@ impl CDPClient {
     // ── Ref-based interactions (use after get_ax_tree) ───────────────
 
     /// Resolve an AX ref to a frontend node ID via DOM.pushNodesByBackendIdsToFrontend.
+    /// Returns better error messages for debugging.
     async fn resolve_ref_to_node_id(&self, ref_id: &str) -> Result<i64, String> {
         let backend_node_id = {
             let cache = self.ax_ref_cache.lock().await;
@@ -1803,16 +1804,40 @@ impl CDPClient {
             )
             .await?;
 
+        // Check for error in response
+        if let Some(error) = push_result.get("error") {
+            return Err(format!(
+                "CDP error resolving ref '{}': {}",
+                ref_id,
+                error.as_str().unwrap_or("unknown error")
+            ));
+        }
+
         let node_ids = push_result
             .get("result")
             .and_then(|r| r.get("nodeIds"))
             .and_then(|v| v.as_array())
-            .ok_or("Failed to resolve backend node")?;
+            .ok_or_else(|| {
+                format!(
+                    "Failed to resolve backend node for ref '{}': no nodeIds in response. \
+                     This may happen on data: URLs or special pages. Response: {}",
+                    ref_id,
+                    serde_json::to_string(&push_result).unwrap_or_default()
+                )
+            })?;
+
+        if node_ids.is_empty() {
+            return Err(format!(
+                "Node for ref '{}' no longer exists or is not accessible (empty nodeIds). \
+                 This may happen on data: URLs or special pages.",
+                ref_id
+            ));
+        }
 
         let node_id = node_ids
             .first()
             .and_then(|v| v.as_i64())
-            .ok_or("Failed to get frontend node ID")?;
+            .ok_or_else(|| format!("Failed to get frontend node ID for ref '{}'", ref_id))?;
 
         if node_id == 0 {
             return Err(format!(
@@ -1929,9 +1954,12 @@ impl CDPClient {
     }
 
     /// Open a new tab with a URL via /json/new endpoint.
+    /// Note: /json/new requires PUT method, not GET.
     pub async fn new_tab(&self, url: &str) -> Result<TabInfo, String> {
         let endpoint = format!("http://localhost:{}/json/new?{}", self.cdp_port, url);
-        let resp = reqwest::get(&endpoint)
+        let resp = reqwest::Client::new()
+            .put(&endpoint)
+            .send()
             .await
             .map_err(|e| format!("Failed to create new tab: {}", e))?;
         let target: serde_json::Value = resp
