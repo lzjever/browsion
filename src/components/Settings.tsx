@@ -95,7 +95,7 @@ export const Settings: React.FC = () => {
       if (source?.type === 'chrome_for_testing') {
         setCftChannel(source.channel);
         setCftVersion(source.version ?? '');
-        setDownloadDir(source.download_dir);
+        setDownloadDir(source.download_dir ?? '');
       }
       setError(null);
     } catch (err) {

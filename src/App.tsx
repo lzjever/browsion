@@ -2,7 +2,6 @@ import { useState } from 'react';
 import { ProfileList } from './components/ProfileList';
 import { ProfileForm } from './components/ProfileForm';
 import { Settings } from './components/Settings';
-import { tauriApi } from './api/tauri';
 import type { BrowserProfile } from './types/profile';
 import './styles/index.css';
 

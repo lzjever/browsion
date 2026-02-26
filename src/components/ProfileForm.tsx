@@ -119,15 +119,6 @@ export const ProfileForm: React.FC<ProfileFormProps> = ({
     );
   };
 
-  const getAdditionalArgs = (): string => {
-    const presetArgs = new Set(
-      ARG_CATEGORIES.flatMap((cat) => cat.args.map((a) => a.arg))
-    );
-    return formData.custom_args
-      .filter((arg) => !presetArgs.has(arg))
-      .join('\n');
-  };
-
   const handlePresetArgsChange = (selectedPresetArgs: string[]) => {
     const presetArgsSet = new Set(
       ARG_CATEGORIES.flatMap((cat) => cat.args.map((a) => a.arg))
