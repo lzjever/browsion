@@ -1,26 +1,18 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { ProfileList } from './components/ProfileList';
 import { ProfileForm } from './components/ProfileForm';
 import { Settings } from './components/Settings';
-import { AgentPanel } from './components/AgentPanel';
-import { SchedulePanel } from './components/SchedulePanel';
 import { tauriApi } from './api/tauri';
 import type { BrowserProfile } from './types/profile';
 import './styles/index.css';
 
-type View = 'profiles' | 'settings' | 'agent' | 'schedule';
+type View = 'profiles' | 'settings';
 
 function App() {
   const [currentView, setCurrentView] = useState<View>('profiles');
   const [showProfileForm, setShowProfileForm] = useState(false);
   const [editingProfile, setEditingProfile] = useState<BrowserProfile | undefined>();
   const [refreshKey, setRefreshKey] = useState(0);
-  const [profiles, setProfiles] = useState<BrowserProfile[]>([]);
-
-  // Load profiles for Agent panel
-  useEffect(() => {
-    tauriApi.getProfiles().then(setProfiles).catch(console.error);
-  }, [refreshKey]);
 
   const handleAddProfile = () => {
     setEditingProfile(undefined);
@@ -66,18 +58,6 @@ function App() {
             Profiles
           </button>
           <button
-            className={`nav-btn ${currentView === 'agent' ? 'active' : ''}`}
-            onClick={() => setCurrentView('agent')}
-          >
-            AI Agent
-          </button>
-          <button
-            className={`nav-btn ${currentView === 'schedule' ? 'active' : ''}`}
-            onClick={() => setCurrentView('schedule')}
-          >
-            Schedule
-          </button>
-          <button
             className={`nav-btn ${currentView === 'settings' ? 'active' : ''}`}
             onClick={() => setCurrentView('settings')}
           >
@@ -96,7 +76,7 @@ function App() {
               </button>
             </div>
             <ProfileList
-              key={refreshKey}
+              refreshTrigger={refreshKey}
               onEditProfile={handleEditProfile}
               onCloneProfile={handleCloneProfile}
             />
@@ -104,10 +84,6 @@ function App() {
         )}
 
         {currentView === 'settings' && <Settings />}
-
-        {currentView === 'agent' && <AgentPanel profiles={profiles} />}
-
-        {currentView === 'schedule' && <SchedulePanel profiles={profiles} />}
       </main>
 
       {showProfileForm && (

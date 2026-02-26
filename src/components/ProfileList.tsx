@@ -6,9 +6,10 @@ import type { BrowserProfile, RunningStatus } from '../types/profile';
 interface ProfileListProps {
   onEditProfile: (profile: BrowserProfile) => void;
   onCloneProfile: (profile: BrowserProfile) => void;
+  refreshTrigger: number;
 }
 
-export const ProfileList: React.FC<ProfileListProps> = ({ onEditProfile, onCloneProfile }) => {
+export const ProfileList: React.FC<ProfileListProps> = ({ onEditProfile, onCloneProfile, refreshTrigger }) => {
   const [profiles, setProfiles] = useState<BrowserProfile[]>([]);
   const [runningStatus, setRunningStatus] = useState<RunningStatus>({});
   const [loading, setLoading] = useState(true);
@@ -48,6 +49,12 @@ export const ProfileList: React.FC<ProfileListProps> = ({ onEditProfile, onClone
 
     return () => clearInterval(interval);
   }, []);
+
+  useEffect(() => {
+    if (refreshTrigger > 0) {
+      loadProfiles();
+    }
+  }, [refreshTrigger]);
 
   const handleLaunch = async (id: string) => {
     try {
