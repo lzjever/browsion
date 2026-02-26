@@ -401,15 +401,17 @@ impl CDPClient {
 
         // Clear AX ref cache on navigation
         self.ax_ref_cache.lock().await.clear();
+        *self.inflight_requests.lock().await = 0;
 
         if wait_until == "networkidle" {
-            // Wait for load event first
-            if let Some(rx) = event_rx {
-                let _ = tokio::time::timeout(tokio::time::Duration::from_millis(timeout_ms), rx).await;
-            }
-            // Then wait until inflight == 0 for 500ms consecutively
-            let idle_target = std::time::Duration::from_millis(500);
             let deadline = std::time::Instant::now() + std::time::Duration::from_millis(timeout_ms);
+            // Wait for load event first (with remaining time budget)
+            if let Some(rx) = event_rx {
+                let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+                let _ = tokio::time::timeout(remaining, rx).await;
+            }
+            // Then wait until inflight == 0 for 500ms consecutively (same deadline)
+            let idle_target = std::time::Duration::from_millis(500);
             let mut idle_since: Option<std::time::Instant> = None;
             loop {
                 if std::time::Instant::now() > deadline {
@@ -1291,7 +1293,7 @@ impl CDPClient {
                 "scale": 1.0
             }
         });
-        if fmt == "jpeg" {
+        if fmt == "jpeg" || fmt == "webp" {
             params["quality"] = json!(quality.unwrap_or(85));
         }
 

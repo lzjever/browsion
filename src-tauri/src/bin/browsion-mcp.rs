@@ -116,6 +116,7 @@ struct NavigateParam {
     /// When to consider navigation complete:
     /// - "load" (default): wait for window.onload — safe for most pages
     /// - "domcontentloaded": wait for DOMContentLoaded only — faster, DOM ready but resources may still load
+    /// - "networkidle": wait for load + no inflight requests for 500ms — best for dynamic/AJAX-heavy pages
     /// - "none": fire-and-forget, return immediately after sending navigation command
     #[serde(default = "default_wait_until")]
     wait_until: String,
