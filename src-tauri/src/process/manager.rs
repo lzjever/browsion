@@ -3,6 +3,7 @@ use crate::error::{BrowsionError, Result};
 use crate::process::launcher;
 use parking_lot::Mutex;
 use std::collections::HashMap;
+use std::path::Path;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use sysinfo::{Pid, ProcessRefreshKind, System};
@@ -18,23 +19,31 @@ pub struct ProcessManager {
 
 impl ProcessManager {
     pub fn new() -> Self {
+        Self::new_with_recent(Vec::new())
+    }
+
+    pub fn new_with_recent(recent: Vec<String>) -> Self {
         Self {
             active_processes: Arc::new(Mutex::new(HashMap::new())),
             system: Arc::new(Mutex::new(System::new_all())),
-            recent_launches: Arc::new(Mutex::new(Vec::new())),
+            recent_launches: Arc::new(Mutex::new(recent)),
         }
     }
 
-    /// Launch a browser profile
-    pub async fn launch_profile(&self, profile_id: &str, config: &AppConfig) -> Result<u32> {
-        // Find the profile
+    /// Launch a browser profile with the given Chrome executable path.
+    /// Returns `(pid, cdp_port)` so callers can connect via CDP.
+    pub async fn launch_profile(
+        &self,
+        profile_id: &str,
+        config: &AppConfig,
+        chrome_path: &Path,
+    ) -> Result<(u32, u16)> {
         let profile = config
             .profiles
             .iter()
             .find(|p| p.id == profile_id)
             .ok_or_else(|| BrowsionError::ProfileNotFound(profile_id.to_string()))?;
 
-        // Check if already running
         if self.is_running(profile_id) {
             return Err(BrowsionError::Process(format!(
                 "Profile {} is already running",
@@ -42,13 +51,17 @@ impl ProcessManager {
             )));
         }
 
-        // Validate Chrome path
-        crate::config::validation::validate_chrome_path(&config.chrome_path)?;
+        crate::config::validation::validate_chrome_path(chrome_path)?;
 
-        // Build and execute command
-        let mut cmd = launcher::build_command(&config.chrome_path, profile);
+        let cdp_port = crate::process::port::allocate_cdp_port();
+        let mut cmd = launcher::build_command(chrome_path, profile, cdp_port);
 
-        tracing::info!("Launching profile {} with command: {:?}", profile_id, cmd);
+        tracing::info!(
+            "Launching profile {} with CDP port {} — command: {:?}",
+            profile_id,
+            cdp_port,
+            cmd
+        );
 
         let child = cmd
             .spawn()
@@ -64,29 +77,38 @@ impl ProcessManager {
             profile_id: profile_id.to_string(),
             pid,
             launched_at: now,
+            cdp_port: Some(cdp_port),
         };
 
-        // Store process info
         self.active_processes
             .lock()
             .insert(profile_id.to_string(), process_info);
 
-        // Update recent launches
         {
             let mut recent = self.recent_launches.lock();
-            // Remove if already exists
             recent.retain(|id| id != profile_id);
-            // Add to front
             recent.insert(0, profile_id.to_string());
-            // Keep only last 10
             if recent.len() > 10 {
                 recent.truncate(10);
             }
         }
 
-        tracing::info!("Launched profile {} with PID {}", profile_id, pid);
+        tracing::info!(
+            "Launched profile {} with PID {} on CDP port {}",
+            profile_id,
+            pid,
+            cdp_port
+        );
 
-        Ok(pid)
+        Ok((pid, cdp_port))
+    }
+
+    /// Get the CDP port for a running profile (if available).
+    pub fn get_cdp_port(&self, profile_id: &str) -> Option<u16> {
+        let processes = self.active_processes.lock();
+        processes
+            .get(profile_id)
+            .and_then(|info| info.cdp_port)
     }
 
     /// Kill a running browser profile
@@ -162,8 +184,10 @@ impl ProcessManager {
         processes.get(profile_id).cloned()
     }
 
-    /// Clean up dead processes from tracking
-    pub async fn cleanup_dead_processes(&self) -> Result<()> {
+    /// Clean up dead processes from tracking.
+    /// Returns the profile IDs that were removed so callers can clean up
+    /// associated resources (e.g. CDP sessions).
+    pub async fn cleanup_dead_processes(&self) -> Result<Vec<String>> {
         let mut to_remove = Vec::new();
 
         {
@@ -178,7 +202,6 @@ impl ProcessManager {
                 );
 
                 let should_remove = if let Some(process) = system.process(pid) {
-                    // Check if it's still a Chrome/Chromium process and not a zombie
                     let name = process.name().to_string_lossy().to_lowercase();
                     let is_chrome = name.contains("chrome") || name.contains("chromium");
                     let is_zombie = process.status() == sysinfo::ProcessStatus::Zombie;
@@ -218,12 +241,12 @@ impl ProcessManager {
 
         if !to_remove.is_empty() {
             let mut processes = self.active_processes.lock();
-            for profile_id in to_remove {
-                processes.remove(&profile_id);
+            for profile_id in &to_remove {
+                processes.remove(profile_id);
             }
         }
 
-        Ok(())
+        Ok(to_remove)
     }
 
     /// Get all running profile IDs

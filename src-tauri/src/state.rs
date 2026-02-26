@@ -1,31 +1,27 @@
-use crate::agent::engine::AgentEngine;
-use crate::agent::types::AIConfig as AgentAIConfig;
+use crate::agent::SessionManager;
 use crate::config::AppConfig;
 use crate::process::ProcessManager;
 use parking_lot::RwLock;
 use std::sync::Arc;
 
 /// Application global state
+#[derive(Clone)]
 pub struct AppState {
-    /// Application configuration
     pub config: Arc<RwLock<AppConfig>>,
-
-    /// Process manager
     pub process_manager: Arc<ProcessManager>,
-
-    /// Agent engine for AI automation
-    pub agent_engine: Arc<AgentEngine>,
+    pub session_manager: Arc<SessionManager>,
+    /// Abort callback for the running API server task, for runtime stop/restart.
+    pub api_server_abort: Arc<std::sync::Mutex<Option<Box<dyn FnOnce() + Send>>>>,
 }
 
 impl AppState {
     pub fn new(config: AppConfig) -> Self {
-        // Convert config AIConfig to agent AIConfig
-        let ai_config = AgentAIConfig::from(config.ai.clone());
-
+        let recent = config.recent_profiles.clone();
         Self {
             config: Arc::new(RwLock::new(config)),
-            process_manager: Arc::new(ProcessManager::new()),
-            agent_engine: Arc::new(AgentEngine::new(ai_config)),
+            process_manager: Arc::new(ProcessManager::new_with_recent(recent)),
+            session_manager: Arc::new(SessionManager::new()),
+            api_server_abort: Arc::new(std::sync::Mutex::new(None)),
         }
     }
 }
