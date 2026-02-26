@@ -2062,6 +2062,51 @@ impl CDPClient {
         Ok(())
     }
 
+    // ── Storage (localStorage / sessionStorage) ─────────────────────────────
+
+    /// Get all key-value pairs from localStorage or sessionStorage.
+    /// `storage_type`: "local" (default) or "session".
+    pub async fn get_storage(&self, storage_type: &str) -> Result<serde_json::Value, String> {
+        let store = if storage_type == "session" { "sessionStorage" } else { "localStorage" };
+        let js = format!(r#"(function() {{
+            const store = window.{store};
+            const result = {{}};
+            for (let i = 0; i < store.length; i++) {{
+                const key = store.key(i);
+                result[key] = store.getItem(key);
+            }}
+            return result;
+        }})()"#);
+        self.evaluate_js(&js).await
+    }
+
+    /// Set a key-value pair in localStorage or sessionStorage.
+    pub async fn set_storage_item(&self, storage_type: &str, key: &str, value: &str) -> Result<(), String> {
+        let store = if storage_type == "session" { "sessionStorage" } else { "localStorage" };
+        let key_json = serde_json::to_string(key).unwrap_or_default();
+        let val_json = serde_json::to_string(value).unwrap_or_default();
+        let js = format!(r#"window.{store}.setItem({key_json}, {val_json})"#);
+        self.evaluate_js(&js).await?;
+        Ok(())
+    }
+
+    /// Remove a single key from localStorage or sessionStorage.
+    pub async fn remove_storage_item(&self, storage_type: &str, key: &str) -> Result<(), String> {
+        let store = if storage_type == "session" { "sessionStorage" } else { "localStorage" };
+        let key_json = serde_json::to_string(key).unwrap_or_default();
+        let js = format!(r#"window.{store}.removeItem({key_json})"#);
+        self.evaluate_js(&js).await?;
+        Ok(())
+    }
+
+    /// Clear all entries from localStorage or sessionStorage.
+    pub async fn clear_storage(&self, storage_type: &str) -> Result<(), String> {
+        let store = if storage_type == "session" { "sessionStorage" } else { "localStorage" };
+        let js = format!(r#"window.{store}.clear()"#);
+        self.evaluate_js(&js).await?;
+        Ok(())
+    }
+
     // ── Close ───────────────────────────────────────────────────────
 
     /// Close the browser

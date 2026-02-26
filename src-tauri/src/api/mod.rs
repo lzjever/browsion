@@ -105,6 +105,8 @@ pub fn router(state: ApiState) -> Router {
         .route("/api/browser/:id/network_log/clear", post(browser_clear_network_log))
         .route("/api/browser/:id/wait_for_text", post(browser_wait_for_text))
         .route("/api/browser/:id/emulate", post(browser_emulate))
+        // Advanced: Storage (localStorage / sessionStorage)
+        .route("/api/browser/:id/storage", get(browser_get_storage).post(browser_set_storage).delete(browser_clear_storage))
         // Utility
         .route("/api/health", get(health))
         .with_state(state)
@@ -1160,6 +1162,72 @@ async fn browser_emulate(
         client.set_geolocation(lat, lon, accuracy).await.map_err(cdp_err)?;
     }
 
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+// ---------------------------------------------------------------------------
+// Advanced: Storage (localStorage / sessionStorage)
+// ---------------------------------------------------------------------------
+
+#[derive(serde::Deserialize, Default)]
+struct StorageQuery {
+    #[serde(default = "default_storage_type")]
+    storage_type: String,
+}
+
+#[derive(serde::Deserialize)]
+struct SetStorageReq {
+    #[serde(default = "default_storage_type")]
+    storage_type: String,
+    key: String,
+    value: String,
+}
+
+#[derive(serde::Deserialize)]
+struct ClearStorageReq {
+    #[serde(default = "default_storage_type")]
+    storage_type: String,
+    key: Option<String>,
+}
+
+fn default_storage_type() -> String { "local".to_string() }
+
+async fn browser_get_storage(
+    State(state): State<ApiState>,
+    AxumPath(id): AxumPath<String>,
+    axum::extract::Query(q): axum::extract::Query<StorageQuery>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let cdp_port = require_cdp_port(&state, &id)?;
+    let handle = state.session_manager.get_client(&id, cdp_port).await.map_err(cdp_err)?;
+    let client = handle.lock().await;
+    let data = client.get_storage(&q.storage_type).await.map_err(cdp_err)?;
+    Ok(Json(serde_json::json!({ "storage": data, "type": q.storage_type })))
+}
+
+async fn browser_set_storage(
+    State(state): State<ApiState>,
+    AxumPath(id): AxumPath<String>,
+    Json(req): Json<SetStorageReq>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let cdp_port = require_cdp_port(&state, &id)?;
+    let handle = state.session_manager.get_client(&id, cdp_port).await.map_err(cdp_err)?;
+    let client = handle.lock().await;
+    client.set_storage_item(&req.storage_type, &req.key, &req.value).await.map_err(cdp_err)?;
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+async fn browser_clear_storage(
+    State(state): State<ApiState>,
+    AxumPath(id): AxumPath<String>,
+    Json(req): Json<ClearStorageReq>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let cdp_port = require_cdp_port(&state, &id)?;
+    let handle = state.session_manager.get_client(&id, cdp_port).await.map_err(cdp_err)?;
+    let client = handle.lock().await;
+    match &req.key {
+        Some(key) => client.remove_storage_item(&req.storage_type, key).await.map_err(cdp_err)?,
+        None => client.clear_storage(&req.storage_type).await.map_err(cdp_err)?,
+    }
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 

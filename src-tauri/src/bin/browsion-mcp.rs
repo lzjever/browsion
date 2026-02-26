@@ -419,6 +419,42 @@ struct EmulateParam {
     accuracy: Option<f64>,
 }
 
+// ── Storage ─────────────────────────────────────────────────────────────────
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct GetStorageParam {
+    /// Browser session ID (profile_id from list_profiles)
+    profile_id: String,
+    /// Storage type: "local" (localStorage, default) or "session" (sessionStorage)
+    #[serde(default)]
+    storage_type: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct SetStorageParam {
+    /// Browser session ID (profile_id from list_profiles)
+    profile_id: String,
+    /// Storage type: "local" (localStorage, default) or "session" (sessionStorage)
+    #[serde(default)]
+    storage_type: Option<String>,
+    /// The key to set
+    key: String,
+    /// The value to set (must be a string)
+    value: String,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct ClearStorageParam {
+    /// Browser session ID (profile_id from list_profiles)
+    profile_id: String,
+    /// Storage type: "local" (localStorage, default) or "session" (sessionStorage)
+    #[serde(default)]
+    storage_type: Option<String>,
+    /// If provided, removes only this key. If omitted, clears ALL entries.
+    #[serde(default)]
+    key: Option<String>,
+}
+
 // ---------------------------------------------------------------------------
 // MCP Server
 // ---------------------------------------------------------------------------
@@ -476,6 +512,19 @@ impl BrowsionMcpServer {
 
     async fn api_delete(&self, path: &str) -> Result<String, McpError> {
         let req = self.client.delete(format!("{}{}", self.base, path));
+        let resp = self.apply_key(req).send().await
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        let status = resp.status();
+        let text = resp.text().await
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        if !status.is_success() {
+            return Err(McpError::internal_error(text, None));
+        }
+        Ok(text)
+    }
+
+    async fn api_delete_with_body(&self, path: &str, body: &serde_json::Value) -> Result<String, McpError> {
+        let req = self.client.delete(format!("{}{}", self.base, path)).json(body);
         let resp = self.apply_key(req).send().await
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
         let status = resp.status();
@@ -1327,6 +1376,58 @@ impl BrowsionMcpServer {
                     "latitude": p.latitude,
                     "longitude": p.longitude,
                     "accuracy": p.accuracy,
+                }),
+            )
+            .await?;
+        Self::text_result(body)
+    }
+
+    // ── 20. Storage (localStorage / sessionStorage) ───────────────────────
+
+    /// Get all localStorage or sessionStorage entries
+    #[tool(description = "Get all key-value pairs from localStorage or sessionStorage. Returns a JSON object with all keys and their string values.")]
+    async fn get_storage(
+        &self,
+        Parameters(p): Parameters<GetStorageParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let st = p.storage_type.as_deref().unwrap_or("local");
+        let body = self
+            .api_get(&format!("/api/browser/{}/storage?storage_type={}", p.profile_id, st))
+            .await?;
+        Self::text_result(body)
+    }
+
+    /// Set a localStorage or sessionStorage entry
+    #[tool(description = "Set a key-value pair in localStorage or sessionStorage. Creates or updates the entry.")]
+    async fn set_storage(
+        &self,
+        Parameters(p): Parameters<SetStorageParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let body = self
+            .api_post(
+                &format!("/api/browser/{}/storage", p.profile_id),
+                &json!({
+                    "storage_type": p.storage_type.as_deref().unwrap_or("local"),
+                    "key": p.key,
+                    "value": p.value,
+                }),
+            )
+            .await?;
+        Self::text_result(body)
+    }
+
+    /// Clear localStorage or sessionStorage (all or single key)
+    #[tool(description = "Clear localStorage or sessionStorage. If 'key' is provided, removes only that key. If 'key' is omitted, clears ALL entries in the storage.")]
+    async fn clear_storage(
+        &self,
+        Parameters(p): Parameters<ClearStorageParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let body = self
+            .api_delete_with_body(
+                &format!("/api/browser/{}/storage", p.profile_id),
+                &json!({
+                    "storage_type": p.storage_type.as_deref().unwrap_or("local"),
+                    "key": p.key,
                 }),
             )
             .await?;
