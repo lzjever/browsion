@@ -4,6 +4,7 @@ import type { BrowserProfile } from '../types/profile';
 interface ProfileItemProps {
   profile: BrowserProfile;
   isRunning: boolean;
+  isLaunching?: boolean;
   onLaunch: (id: string) => void;
   onActivate: (id: string) => void;
   onKill: (id: string) => void;
@@ -15,6 +16,7 @@ interface ProfileItemProps {
 export const ProfileItem: React.FC<ProfileItemProps> = ({
   profile,
   isRunning,
+  isLaunching = false,
   onLaunch,
   onActivate,
   onKill,
@@ -34,8 +36,6 @@ export const ProfileItem: React.FC<ProfileItemProps> = ({
           {profile.description && <p className="description">{profile.description}</p>}
           <div className="profile-details">
             <span className="detail">Lang: {profile.lang}</span>
-            {profile.timezone && <span className="detail">TZ: {profile.timezone}</span>}
-            {profile.fingerprint && <span className="detail">FP: {profile.fingerprint}</span>}
             {profile.tags && profile.tags.length > 0 && (
               <>
                 {profile.tags.slice(0, 3).map((tag) => (
@@ -59,8 +59,12 @@ export const ProfileItem: React.FC<ProfileItemProps> = ({
 
       <div className="profile-actions">
         {!isRunning ? (
-          <button className="btn btn-primary" onClick={() => onLaunch(profile.id)}>
-            Launch
+          <button
+            className="btn btn-primary"
+            onClick={() => onLaunch(profile.id)}
+            disabled={isLaunching}
+          >
+            {isLaunching ? 'Launching…' : 'Launch'}
           </button>
         ) : (
           <>

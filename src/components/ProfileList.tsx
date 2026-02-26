@@ -15,6 +15,7 @@ export const ProfileList: React.FC<ProfileListProps> = ({ onEditProfile, onClone
   const [profiles, setProfiles] = useState<BrowserProfile[]>([]);
   const [runningStatus, setRunningStatus] = useState<RunningStatus>({});
   const [loading, setLoading] = useState(true);
+  const [launchingId, setLaunchingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [tagFilter, setTagFilter] = useState('');
 
@@ -67,6 +68,7 @@ export const ProfileList: React.FC<ProfileListProps> = ({ onEditProfile, onClone
   }, [refreshTrigger]);
 
   const handleLaunch = async (id: string) => {
+    setLaunchingId(id);
     try {
       await tauriApi.launchProfile(id);
       const status = await tauriApi.getRunningProfiles();
@@ -74,6 +76,8 @@ export const ProfileList: React.FC<ProfileListProps> = ({ onEditProfile, onClone
       showToast('Browser launched', 'success');
     } catch (err) {
       showToast(`Failed to launch: ${err}`, 'error');
+    } finally {
+      setLaunchingId(null);
     }
   };
 
@@ -169,6 +173,7 @@ export const ProfileList: React.FC<ProfileListProps> = ({ onEditProfile, onClone
               key={profile.id}
               profile={profile}
               isRunning={runningStatus[profile.id] || false}
+              isLaunching={launchingId === profile.id}
               onLaunch={handleLaunch}
               onActivate={handleActivate}
               onKill={handleKill}
