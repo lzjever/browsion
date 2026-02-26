@@ -188,78 +188,143 @@ impl CDPClient {
     async fn setup_ws_connection(&mut self, ws_url: &str) -> Result<(), String> {
         tracing::info!("Connecting to CDP WebSocket: {}", ws_url);
 
-        let (ws_stream, _) =
-            connect_async(ws_url)
-                .await
-                .map_err(|e| format!("Failed to connect WebSocket: {}", e))?;
+        let (ws_stream, _) = connect_async(ws_url)
+            .await
+            .map_err(|e| format!("Failed to connect WebSocket: {}", e))?;
 
         let (tx, mut rx) = StreamExt::split(ws_stream);
-        self.ws_tx = Some(Arc::new(Mutex::new(tx)));
+        let ws_tx_arc = Arc::new(Mutex::new(tx));
+        self.ws_tx = Some(ws_tx_arc.clone());
 
+        // Clone all shared state for the reader task
         let responses = self.responses.clone();
         let events = self.events.clone();
         let network_log = self.network_log.clone();
+        let console_log = self.console_log.clone();
         let inflight_clone = self.inflight_requests.clone();
+        let tab_registry = self.tab_registry.clone();
+        let intercept_rules = self.intercept_rules.clone();
+        let frame_contexts_clone = self.frame_contexts.clone();
+        let ws_tx_for_reader = ws_tx_arc.clone();
+        let msg_id_for_reader = self.msg_id.clone();
+
         tokio::spawn(async move {
             while let Some(msg) = StreamExt::next(&mut rx).await {
                 match msg {
                     Ok(WsMessage::Text(text)) => {
                         if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) {
-                            // Extract session_id from message (empty string = browser-level)
-                            let msg_session_id = json
+                            // Extract sessionId ("" = browser-level)
+                            let session_id = json
                                 .get("sessionId")
                                 .and_then(|v| v.as_str())
                                 .unwrap_or("")
                                 .to_string();
 
                             if let Some(id) = json.get("id").and_then(|i| i.as_u64()) {
-                                // Command response — key is (session_id, msg_id)
-                                let key = (msg_session_id, id as u32);
+                                // ── Command response ──────────────────────────
+                                let key = (session_id.clone(), id as u32);
                                 if let Some(sender) = responses.lock().await.remove(&key) {
-                                    let _ = sender.send(json);
+                                    let _ = sender.send(json.clone());
                                 }
                             } else if let Some(method_val) = json.get("method") {
-                                // CDP event
-                                let method = method_val
-                                    .as_str()
-                                    .unwrap_or("")
-                                    .to_string();
+                                // ── CDP Event ─────────────────────────────────
+                                let method = method_val.as_str().unwrap_or("").to_string();
                                 let params = json
                                     .get("params")
                                     .cloned()
                                     .unwrap_or(serde_json::Value::Null);
 
-                                // Persistent network log capture (independent of subscribers)
+                                // Persistent event handlers
                                 match method.as_str() {
+                                    // ── Target: tab lifecycle ─────────────────
+                                    "Target.attachedToTarget" => {
+                                        let target_id = params["targetInfo"]["targetId"]
+                                            .as_str().unwrap_or("").to_string();
+                                        let new_session_id = params["sessionId"]
+                                            .as_str().unwrap_or("").to_string();
+                                        let url = params["targetInfo"]["url"]
+                                            .as_str().unwrap_or("").to_string();
+                                        let mut reg = tab_registry.lock().await;
+                                        let tab = reg.entry(target_id.clone()).or_default();
+                                        tab.session_id = new_session_id;
+                                        if !url.is_empty() { tab.url = url; }
+                                        tracing::debug!("Tab attached: {}", target_id);
+                                    }
+                                    "Target.targetCreated" => {
+                                        let target_id = params["targetInfo"]["targetId"]
+                                            .as_str().unwrap_or("").to_string();
+                                        let target_type = params["targetInfo"]["type"]
+                                            .as_str().unwrap_or("");
+                                        let url = params["targetInfo"]["url"]
+                                            .as_str().unwrap_or("").to_string();
+                                        if target_type == "page" {
+                                            let mut reg = tab_registry.lock().await;
+                                            reg.entry(target_id.clone()).or_insert_with(|| {
+                                                let mut s = TabState::default();
+                                                s.url = url;
+                                                s
+                                            });
+                                            tracing::debug!("New tab discovered: {}", target_id);
+                                        }
+                                    }
+                                    "Target.targetDestroyed" => {
+                                        let target_id = params["targetId"]
+                                            .as_str().unwrap_or("").to_string();
+                                        tab_registry.lock().await.remove(&target_id);
+                                        tracing::debug!("Tab destroyed: {}", target_id);
+                                    }
+                                    "Target.targetInfoChanged" => {
+                                        let target_id = params["targetInfo"]["targetId"]
+                                            .as_str().unwrap_or("").to_string();
+                                        let url = params["targetInfo"]["url"]
+                                            .as_str().unwrap_or("").to_string();
+                                        let mut reg = tab_registry.lock().await;
+                                        if let Some(tab) = reg.get_mut(&target_id) {
+                                            if !url.is_empty() { tab.url = url; }
+                                        }
+                                        tracing::debug!("Tab info changed: {}", target_id);
+                                    }
+                                    // ── Network: inflight tracking ────────────
                                     "Network.requestWillBeSent" => {
-                                        let url = params.get("request").and_then(|r| r.get("url")).and_then(|v| v.as_str()).unwrap_or("").to_string();
-                                        let req_method = params.get("request").and_then(|r| r.get("method")).and_then(|v| v.as_str()).unwrap_or("").to_string();
-                                        let request_id = params.get("requestId").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                                        let url = params["request"]["url"]
+                                            .as_str().unwrap_or("").to_string();
+                                        let req_method = params["request"]["method"]
+                                            .as_str().unwrap_or("").to_string();
+                                        let request_id = params["requestId"]
+                                            .as_str().unwrap_or("").to_string();
                                         let mut log = network_log.lock().await;
-                                        if log.len() >= 200 { log.pop_front(); }
+                                        if log.len() >= 500 { log.pop_front(); }
                                         log.push_back(serde_json::json!({
                                             "type": "request",
                                             "url": url,
                                             "method": req_method,
-                                            "requestId": request_id
+                                            "requestId": request_id,
+                                            "sessionId": session_id
                                         }));
-                                        let mut count = inflight_clone.lock().await;
-                                        *count = count.saturating_add(1);
+                                        drop(log);
+                                        *inflight_clone.lock().await =
+                                            inflight_clone.lock().await.saturating_add(1);
                                     }
                                     "Network.responseReceived" => {
-                                        let url = params.get("response").and_then(|r| r.get("url")).and_then(|v| v.as_str()).unwrap_or("").to_string();
-                                        let status = params.get("response").and_then(|r| r.get("status")).and_then(|v| v.as_i64()).unwrap_or(0);
-                                        let mime = params.get("response").and_then(|r| r.get("mimeType")).and_then(|v| v.as_str()).unwrap_or("").to_string();
-                                        let request_id = params.get("requestId").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                                        let url = params["response"]["url"]
+                                            .as_str().unwrap_or("").to_string();
+                                        let status = params["response"]["status"]
+                                            .as_i64().unwrap_or(0);
+                                        let mime = params["response"]["mimeType"]
+                                            .as_str().unwrap_or("").to_string();
+                                        let request_id = params["requestId"]
+                                            .as_str().unwrap_or("").to_string();
                                         let mut log = network_log.lock().await;
-                                        if log.len() >= 200 { log.pop_front(); }
+                                        if log.len() >= 500 { log.pop_front(); }
                                         log.push_back(serde_json::json!({
                                             "type": "response",
                                             "url": url,
                                             "status": status,
                                             "mimeType": mime,
-                                            "requestId": request_id
+                                            "requestId": request_id,
+                                            "sessionId": session_id
                                         }));
+                                        drop(log);
                                         let mut count = inflight_clone.lock().await;
                                         *count = count.saturating_sub(1);
                                     }
@@ -267,13 +332,177 @@ impl CDPClient {
                                         let mut count = inflight_clone.lock().await;
                                         *count = count.saturating_sub(1);
                                     }
+                                    // ── Console: Runtime.consoleAPICalled ──────
+                                    "Runtime.consoleAPICalled" => {
+                                        let console_type = params["type"]
+                                            .as_str().unwrap_or("log").to_string();
+                                        let args: Vec<String> = params["args"]
+                                            .as_array()
+                                            .map(|arr| arr.iter().map(|a| {
+                                                a.get("value")
+                                                    .and_then(|v| {
+                                                        if v.is_string() { v.as_str().map(|s| s.to_string()) }
+                                                        else { Some(v.to_string()) }
+                                                    })
+                                                    .or_else(|| a.get("description")
+                                                        .and_then(|v| v.as_str())
+                                                        .map(|s| s.to_string()))
+                                                    .unwrap_or_default()
+                                            }).collect())
+                                            .unwrap_or_default();
+                                        let timestamp = params["timestamp"]
+                                            .as_f64().unwrap_or(0.0);
+                                        let mut log = console_log.lock().await;
+                                        if log.len() >= 500 { log.pop_front(); }
+                                        log.push_back(serde_json::json!({
+                                            "type": console_type,
+                                            "args": args,
+                                            "timestamp": timestamp,
+                                            "source": "console"
+                                        }));
+                                    }
+                                    // ── Console: Log.entryAdded (browser logs) ─
+                                    "Log.entryAdded" => {
+                                        let entry = &params["entry"];
+                                        let level = entry["level"].as_str().unwrap_or("info");
+                                        let text = entry["text"].as_str().unwrap_or("");
+                                        let source = entry["source"].as_str().unwrap_or("other");
+                                        let timestamp = entry["timestamp"].as_f64().unwrap_or(0.0);
+                                        let mut log = console_log.lock().await;
+                                        if log.len() >= 500 { log.pop_front(); }
+                                        log.push_back(serde_json::json!({
+                                            "type": level,
+                                            "args": [text],
+                                            "timestamp": timestamp,
+                                            "source": source
+                                        }));
+                                    }
+                                    // ── Console: Runtime.exceptionThrown ───────
+                                    "Runtime.exceptionThrown" => {
+                                        let desc = params["exceptionDetails"]["exception"]["description"]
+                                            .as_str()
+                                            .or_else(|| params["exceptionDetails"]["text"].as_str())
+                                            .unwrap_or("Unknown JS exception")
+                                            .to_string();
+                                        let url_str = params["exceptionDetails"]["url"]
+                                            .as_str().unwrap_or("").to_string();
+                                        let line = params["exceptionDetails"]["lineNumber"]
+                                            .as_i64().unwrap_or(0);
+                                        let timestamp = params["timestamp"].as_f64().unwrap_or(0.0);
+                                        let mut log = console_log.lock().await;
+                                        if log.len() >= 500 { log.pop_front(); }
+                                        log.push_back(serde_json::json!({
+                                            "type": "error",
+                                            "args": [format!("Uncaught: {} ({}:{})", desc, url_str, line)],
+                                            "timestamp": timestamp,
+                                            "source": "exception"
+                                        }));
+                                    }
+                                    // ── Frame contexts ──────────────────────────
+                                    "Runtime.executionContextCreated" => {
+                                        let ctx = &params["context"];
+                                        if let (Some(ctx_id), Some(frame_id)) = (
+                                            ctx["id"].as_i64(),
+                                            ctx["auxData"]["frameId"].as_str(),
+                                        ) {
+                                            frame_contexts_clone
+                                                .lock().await
+                                                .insert(frame_id.to_string(), ctx_id);
+                                        }
+                                    }
+                                    "Runtime.executionContextDestroyed" => {
+                                        let ctx_id = params["executionContextId"].as_i64();
+                                        if let Some(cid) = ctx_id {
+                                            let mut fc = frame_contexts_clone.lock().await;
+                                            fc.retain(|_, v| *v != cid);
+                                        }
+                                    }
+                                    // ── Network Interception (Fetch domain) ────
+                                    "Fetch.requestPaused" => {
+                                        let request_id = params["requestId"]
+                                            .as_str().unwrap_or("").to_string();
+                                        let url = params["request"]["url"]
+                                            .as_str().unwrap_or("").to_string();
+                                        let rules = intercept_rules.lock().await;
+                                        let matching = rules.iter()
+                                            .find(|r| url.contains(&r.url_pattern))
+                                            .cloned();
+                                        drop(rules);
+
+                                        let (resp_method, resp_params) = match matching {
+                                            None => (
+                                                "Fetch.continueRequest",
+                                                serde_json::json!({ "requestId": request_id }),
+                                            ),
+                                            Some(crate::agent::types::InterceptRule {
+                                                action: crate::agent::types::InterceptAction::Block,
+                                                ..
+                                            }) => (
+                                                "Fetch.failRequest",
+                                                serde_json::json!({
+                                                    "requestId": request_id,
+                                                    "errorReason": "BlockedByClient"
+                                                }),
+                                            ),
+                                            Some(crate::agent::types::InterceptRule {
+                                                action: crate::agent::types::InterceptAction::Mock {
+                                                    status, body, content_type
+                                                },
+                                                ..
+                                            }) => {
+                                                use base64::Engine;
+                                                let body_b64 = base64::engine::general_purpose::STANDARD
+                                                    .encode(&body);
+                                                (
+                                                    "Fetch.fulfillRequest",
+                                                    serde_json::json!({
+                                                        "requestId": request_id,
+                                                        "responseCode": status,
+                                                        "responseHeaders": [{
+                                                            "name": "Content-Type",
+                                                            "value": content_type
+                                                        }],
+                                                        "body": body_b64
+                                                    }),
+                                                )
+                                            }
+                                        };
+
+                                        // Send response directly from the reader
+                                        let ws_clone = ws_tx_for_reader.clone();
+                                        let mid = msg_id_for_reader.clone();
+                                        let sid = session_id.clone();
+                                        let rm = resp_method;
+                                        let rp = resp_params;
+                                        tokio::spawn(async move {
+                                            let id = {
+                                                let mut m = mid.lock().await;
+                                                *m += 1;
+                                                *m
+                                            };
+                                            let mut cmd = serde_json::json!({
+                                                "id": id,
+                                                "method": rm,
+                                                "params": rp
+                                            });
+                                            if !sid.is_empty() {
+                                                cmd["sessionId"] =
+                                                    serde_json::Value::String(sid);
+                                            }
+                                            let _ = ws_clone
+                                                .lock().await
+                                                .send(WsMessage::Text(cmd.to_string()))
+                                                .await;
+                                        });
+                                    }
                                     _ => {}
                                 }
 
-                                // One-shot event subscribers — key is (session_id, method)
-                                let event_key = (msg_session_id, method.clone());
-                                let mut ev = events.lock().await;
-                                if let Some(senders) = ev.remove(&event_key) {
+                                // Dispatch to one-shot subscribers (session-aware)
+                                let key = (session_id.clone(), method.clone());
+                                if let Some(senders) =
+                                    events.lock().await.remove(&key)
+                                {
                                     for sender in senders {
                                         let _ = sender.send(params.clone());
                                     }
@@ -293,13 +522,7 @@ impl CDPClient {
             }
         });
 
-        tracing::info!("CDP client connected for profile {}", self.profile_id);
-
-        self.send_command("Page.enable", json!({})).await?;
-        self.send_command("Runtime.enable", json!({})).await?;
-        self.send_command("Network.enable", json!({})).await?;
-        tracing::info!("CDP domains enabled");
-
+        tracing::info!("CDP WebSocket reader started for profile {}", self.profile_id);
         Ok(())
     }
 
