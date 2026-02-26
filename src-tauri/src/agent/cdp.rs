@@ -205,11 +205,17 @@ impl CDPClient {
                 match msg {
                     Ok(WsMessage::Text(text)) => {
                         if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) {
+                            // Extract session_id from message (empty string = browser-level)
+                            let msg_session_id = json
+                                .get("sessionId")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string();
+
                             if let Some(id) = json.get("id").and_then(|i| i.as_u64()) {
-                                // Command response
-                                if let Some(sender) =
-                                    responses.lock().await.remove(&(id as u32))
-                                {
+                                // Command response — key is (session_id, msg_id)
+                                let key = (msg_session_id, id as u32);
+                                if let Some(sender) = responses.lock().await.remove(&key) {
                                     let _ = sender.send(json);
                                 }
                             } else if let Some(method_val) = json.get("method") {
@@ -264,9 +270,10 @@ impl CDPClient {
                                     _ => {}
                                 }
 
-                                // One-shot event subscribers
+                                // One-shot event subscribers — key is (session_id, method)
+                                let event_key = (msg_session_id, method.clone());
                                 let mut ev = events.lock().await;
-                                if let Some(senders) = ev.remove(&method) {
+                                if let Some(senders) = ev.remove(&event_key) {
                                     for sender in senders {
                                         let _ = sender.send(params.clone());
                                     }
@@ -296,9 +303,31 @@ impl CDPClient {
         Ok(())
     }
 
-    /// Send a CDP command and wait for response
+    /// Send a CDP command to the currently active tab session.
+    /// If no tab is active yet (during initial setup), sends at browser level (no sessionId).
     async fn send_command(
         &self,
+        method: &str,
+        params: serde_json::Value,
+    ) -> Result<serde_json::Value, String> {
+        let session_id = self.active_session_id().await;
+        self.send_command_in_session(&session_id, method, params).await
+    }
+
+    /// Send a CDP command explicitly at browser level (no sessionId).
+    /// Use for Target.* domain commands regardless of active tab.
+    async fn send_browser_command(
+        &self,
+        method: &str,
+        params: serde_json::Value,
+    ) -> Result<serde_json::Value, String> {
+        self.send_command_in_session("", method, params).await
+    }
+
+    /// Core command sender — routes by (session_id, msg_id).
+    async fn send_command_in_session(
+        &self,
+        session_id: &str,
         method: &str,
         params: serde_json::Value,
     ) -> Result<serde_json::Value, String> {
@@ -308,17 +337,20 @@ impl CDPClient {
             let mut msg_id = self.msg_id.lock().await;
             *msg_id += 1;
             let id = *msg_id - 1;
-
-            let (tx, rx) = tokio::sync::oneshot::channel();
-            self.responses.lock().await.insert(id, tx);
+            let (resp_tx, rx) = tokio::sync::oneshot::channel();
+            let key = (session_id.to_string(), id);
+            self.responses.lock().await.insert(key, resp_tx);
             (id, rx)
         };
 
-        let command = json!({
+        let mut command = serde_json::json!({
             "id": id,
             "method": method,
             "params": params
         });
+        if !session_id.is_empty() {
+            command["sessionId"] = serde_json::Value::String(session_id.to_string());
+        }
 
         let mut tx_guard = tx.lock().await;
         tx_guard
@@ -327,27 +359,49 @@ impl CDPClient {
             .map_err(|e| format!("Failed to send command: {}", e))?;
         drop(tx_guard);
 
-        // Wait for response with timeout
         match tokio::time::timeout(tokio::time::Duration::from_secs(30), rx).await {
             Ok(Ok(response)) => Ok(response),
             Ok(Err(_)) => Err("Response channel closed".to_string()),
-            Err(_) => Err("Command timeout".to_string()),
+            Err(_) => Err(format!("Command timeout: {}", method)),
         }
     }
 
-    /// Register a one-shot listener for a CDP event method.
+    /// Returns the CDP session_id for the currently active tab.
+    /// Returns empty string if no tab is active (browser-level).
+    async fn active_session_id(&self) -> String {
+        let target_id = self.active_target_id.lock().await.clone();
+        if target_id.is_empty() {
+            return String::new();
+        }
+        self.tab_registry
+            .lock()
+            .await
+            .get(&target_id)
+            .map(|t| t.session_id.clone())
+            .unwrap_or_default()
+    }
+
+    /// Subscribe to a CDP event in the active tab session.
     /// Must be called BEFORE triggering the action that fires the event.
     async fn subscribe_event(
         &self,
         method: &str,
     ) -> Result<tokio::sync::oneshot::Receiver<serde_json::Value>, String> {
+        let session_id = self.active_session_id().await;
         let (tx, rx) = tokio::sync::oneshot::channel();
-        self.events
-            .lock()
-            .await
-            .entry(method.to_string())
-            .or_default()
-            .push(tx);
+        let key = (session_id, method.to_string());
+        self.events.lock().await.entry(key).or_default().push(tx);
+        Ok(rx)
+    }
+
+    /// Subscribe to a browser-level CDP event (Target.* domain, no sessionId).
+    async fn subscribe_browser_event(
+        &self,
+        method: &str,
+    ) -> Result<tokio::sync::oneshot::Receiver<serde_json::Value>, String> {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let key = ("".to_string(), method.to_string());
+        self.events.lock().await.entry(key).or_default().push(tx);
         Ok(rx)
     }
 
