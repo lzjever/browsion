@@ -1073,6 +1073,30 @@ impl CDPClient {
         Ok(())
     }
 
+    /// Scroll within a specific element using real mouse wheel events.
+    /// `selector` can be "window" or empty for page-level scroll.
+    /// `delta_x`: horizontal scroll (positive = right), `delta_y`: vertical scroll (positive = down).
+    pub async fn scroll_element(&self, selector: &str, delta_x: f64, delta_y: f64) -> Result<(), String> {
+        let (cx, cy) = if selector.is_empty() || selector == "window" {
+            // Scroll at viewport center
+            (640.0f64, 400.0f64)
+        } else {
+            self.get_element_center(selector).await?
+        };
+
+        self.send_command("Input.dispatchMouseEvent", json!({
+            "type": "mouseWheel",
+            "x": cx,
+            "y": cy,
+            "deltaX": delta_x,
+            "deltaY": delta_y,
+            "modifiers": 0,
+        })).await?;
+
+        tracing::debug!("Scrolled element '{}' by ({}, {})", selector, delta_x, delta_y);
+        Ok(())
+    }
+
     /// Wait for an element to appear in the DOM.
     pub async fn wait_for_element(&self, selector: &str, timeout_ms: u64) -> Result<(), String> {
         let timeout = std::time::Duration::from_millis(timeout_ms);

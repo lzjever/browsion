@@ -215,6 +215,20 @@ struct ScrollParam {
 fn default_scroll() -> u32 { 500 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct ScrollElementParam {
+    /// Browser session ID (profile_id from list_profiles)
+    profile_id: String,
+    /// CSS selector of element to scroll within. Use "window" for page-level scroll.
+    selector: String,
+    /// Horizontal scroll delta in pixels (positive = right, negative = left)
+    #[serde(default)]
+    delta_x: Option<f64>,
+    /// Vertical scroll delta in pixels (positive = down, negative = up)
+    #[serde(default)]
+    delta_y: Option<f64>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 struct WaitForParam {
     /// Profile ID
     profile_id: String,
@@ -925,6 +939,25 @@ impl BrowsionMcpServer {
             .api_post(
                 &format!("/api/browser/{}/scroll_into_view", p.profile_id),
                 &json!({ "selector": p.selector }),
+            )
+            .await?;
+        Self::text_result(body)
+    }
+
+    /// Scroll within a specific element using real mouse wheel events
+    #[tool(description = "Scroll within a specific element using real mouse wheel events. Use delta_y > 0 to scroll down, delta_y < 0 to scroll up. More compatible with custom scroll handlers than CSS-based scrolling.")]
+    async fn scroll_element(
+        &self,
+        Parameters(p): Parameters<ScrollElementParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let body = self
+            .api_post(
+                &format!("/api/browser/{}/scroll_element", p.profile_id),
+                &json!({
+                    "selector": p.selector,
+                    "delta_x": p.delta_x.unwrap_or(0.0),
+                    "delta_y": p.delta_y.unwrap_or(0.0),
+                }),
             )
             .await?;
         Self::text_result(body)

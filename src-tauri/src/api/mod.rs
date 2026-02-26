@@ -105,6 +105,7 @@ pub fn router(state: ApiState) -> Router {
         .route("/api/browser/:id/network_log/clear", post(browser_clear_network_log))
         .route("/api/browser/:id/wait_for_text", post(browser_wait_for_text))
         .route("/api/browser/:id/emulate", post(browser_emulate))
+        .route("/api/browser/:id/scroll_element", post(browser_scroll_element))
         // Advanced: Storage (localStorage / sessionStorage)
         .route("/api/browser/:id/storage", get(browser_get_storage).post(browser_set_storage).delete(browser_clear_storage))
         // Utility
@@ -359,6 +360,15 @@ struct ScrollReq {
     direction: String,
     #[serde(default = "default_scroll_amount")]
     amount: u32,
+}
+
+#[derive(serde::Deserialize)]
+struct ScrollElementReq {
+    selector: String,
+    #[serde(default)]
+    delta_x: f64,
+    #[serde(default)]
+    delta_y: f64,
 }
 
 fn default_scroll_amount() -> u32 {
@@ -764,6 +774,18 @@ async fn browser_scroll(
     let handle = state.session_manager.get_client(&id, cdp_port).await.map_err(cdp_err)?;
     let client = handle.lock().await;
     client.scroll(&req.direction, req.amount).await.map_err(cdp_err)?;
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+async fn browser_scroll_element(
+    State(state): State<ApiState>,
+    AxumPath(id): AxumPath<String>,
+    Json(req): Json<ScrollElementReq>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let cdp_port = require_cdp_port(&state, &id)?;
+    let handle = state.session_manager.get_client(&id, cdp_port).await.map_err(cdp_err)?;
+    let client = handle.lock().await;
+    client.scroll_element(&req.selector, req.delta_x, req.delta_y).await.map_err(cdp_err)?;
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
