@@ -2,8 +2,9 @@ use crate::config::schema::BrowserProfile;
 use std::path::Path;
 use std::process::Command;
 
-/// Build Chrome launch command with all parameters
-pub fn build_command(chrome_path: &Path, profile: &BrowserProfile) -> Command {
+/// Build Chrome launch command with all parameters.
+/// `cdp_port` enables `--remote-debugging-port` so CDP can attach later.
+pub fn build_command(chrome_path: &Path, profile: &BrowserProfile, cdp_port: u16) -> Command {
     let mut cmd = Command::new(chrome_path);
 
     // User data directory (required)
@@ -11,6 +12,9 @@ pub fn build_command(chrome_path: &Path, profile: &BrowserProfile) -> Command {
         "--user-data-dir={}",
         profile.user_data_dir.display()
     ));
+
+    // CDP remote-debugging port (always set so the browser is controllable)
+    cmd.arg(format!("--remote-debugging-port={}", cdp_port));
 
     // Fingerprint (if specified)
     if let Some(fp) = &profile.fingerprint {
@@ -25,10 +29,25 @@ pub fn build_command(chrome_path: &Path, profile: &BrowserProfile) -> Command {
     // Language
     cmd.arg(format!("--lang={}", profile.lang));
 
-    // Timezone (for fingerprint-chromium)
+    // Timezone (for fingerprint-chromium and general Chromium)
+    // Set both --timezone (used by fingerprint-chromium) and TZ env (used by process/libc)
+    // so the browser and JS see the correct timezone.
     if let Some(tz) = &profile.timezone {
         cmd.arg(format!("--timezone={}", tz));
+        cmd.env("TZ", tz);
     }
+
+    // Stability and compatibility flags
+    cmd.arg("--no-first-run");           // Skip first run wizards
+    cmd.arg("--no-default-browser-check"); // Don't check if default browser
+    cmd.arg("--disable-background-networking"); // Disable various background network features
+    cmd.arg("--disable-client-side-phishing-detection");
+    cmd.arg("--disable-default-apps");
+    cmd.arg("--disable-sync");            // Disable sync
+    cmd.arg("--metrics-recording-only");  // Disable metrics upload
+    cmd.arg("--disable-blink-features=AutomationControlled"); // Hide automation
+    cmd.arg("--disable-crash-reporter");  // Disable crash reporter to avoid crashpad issues
+    cmd.arg("--disable-in-process-stack-traces"); // Disable stack traces
 
     // Custom arguments
     for arg in &profile.custom_args {
@@ -73,7 +92,7 @@ mod tests {
             tags: vec![],
         };
 
-        let cmd = build_command(Path::new("/usr/bin/google-chrome"), &profile);
+        let cmd = build_command(Path::new("/usr/bin/google-chrome"), &profile, 9300);
         let args: Vec<String> = cmd
             .get_args()
             .map(|s| s.to_string_lossy().to_string())
@@ -81,6 +100,7 @@ mod tests {
 
         assert!(args.contains(&"--user-data-dir=/tmp/chrome-profile".to_string()));
         assert!(args.contains(&"--lang=en-US".to_string()));
+        assert!(args.contains(&"--remote-debugging-port=9300".to_string()));
     }
 
     #[test]
@@ -99,7 +119,7 @@ mod tests {
             tags: vec![],
         };
 
-        let cmd = build_command(Path::new("/usr/bin/google-chrome"), &profile);
+        let cmd = build_command(Path::new("/usr/bin/google-chrome"), &profile, 9301);
         let args: Vec<String> = cmd
             .get_args()
             .map(|s| s.to_string_lossy().to_string())
@@ -109,5 +129,6 @@ mod tests {
         assert!(args.contains(&"--fingerprint=10000".to_string()));
         assert!(args.contains(&"--timezone=America/Los_Angeles".to_string()));
         assert!(args.contains(&"--disable-gpu".to_string()));
+        assert!(args.contains(&"--remote-debugging-port=9301".to_string()));
     }
 }
