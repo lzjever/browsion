@@ -1,4 +1,4 @@
-use crate::agent::types::{AXNode, CookieInfo, DOMContext, DOMElement, PageState, TabInfo};
+use crate::agent::types::{AXNode, CookieInfo, DOMContext, DOMElement, PageState};
 use crate::config::schema::BrowserProfile;
 use futures::{SinkExt, StreamExt};
 use serde_json::json;
@@ -2324,76 +2324,205 @@ impl CDPClient {
 
     // ── Advanced: Tabs ─────────────────────────────────────────────
 
-    /// List all browser tabs via /json/list HTTP endpoint.
-    pub async fn list_tabs(&self) -> Result<Vec<TabInfo>, String> {
-        let url = format!("http://localhost:{}/json/list", self.cdp_port);
-        let resp = reqwest::get(&url)
-            .await
-            .map_err(|e| format!("Failed to list tabs: {}", e))?;
-        let targets: Vec<serde_json::Value> = resp
-            .json()
-            .await
-            .map_err(|e| format!("Failed to parse tab list: {}", e))?;
+    /// Wait for a new tab to open (e.g. triggered by clicking a target="_blank" link).
+    /// Call this BEFORE the action that opens the tab to avoid race conditions.
+    /// Returns the target_id of the new tab.
+    pub async fn wait_for_new_tab(&self, timeout_ms: u64) -> Result<String, String> {
+        // Subscribe BEFORE the action that creates the tab
+        let rx = self.subscribe_browser_event("Target.targetCreated").await?;
 
-        let tabs = targets
+        match tokio::time::timeout(
+            tokio::time::Duration::from_millis(timeout_ms),
+            rx,
+        )
+        .await
+        {
+            Ok(Ok(params)) => {
+                let target_type = params["targetInfo"]["type"].as_str().unwrap_or("");
+                if target_type != "page" {
+                    return Err(format!(
+                        "New target is type '{}', not a page tab",
+                        target_type
+                    ));
+                }
+                let target_id = params["targetInfo"]["targetId"]
+                    .as_str()
+                    .ok_or("No targetId in Target.targetCreated event")?
+                    .to_string();
+                tracing::debug!("wait_for_new_tab: new tab detected: {}", target_id);
+                Ok(target_id)
+            }
+            Ok(Err(_)) => Err("wait_for_new_tab: event channel closed".to_string()),
+            Err(_) => Err(format!(
+                "wait_for_new_tab: no new tab appeared within {}ms",
+                timeout_ms
+            )),
+        }
+    }
+
+    /// Switch the active CDP session to a different tab.
+    /// Attaches to the target if not already attached.
+    /// Saves/restores per-tab state (AX cache, inflight counter, URL).
+    pub async fn switch_tab(&self, target_id: &str) -> Result<(), String> {
+        let current_target = self.active_target_id.lock().await.clone();
+        if current_target == target_id {
+            tracing::debug!("switch_tab: already on {}", target_id);
+            return Ok(());
+        }
+
+        // Save current tab state
+        if !current_target.is_empty() {
+            let ax_cache = self.ax_ref_cache.lock().await.clone();
+            let inflight = *self.inflight_requests.lock().await;
+            let url = self.current_url.lock().await.clone();
+            let mut reg = self.tab_registry.lock().await;
+            if let Some(tab) = reg.get_mut(&current_target) {
+                tab.ax_ref_cache = ax_cache;
+                tab.inflight_requests = inflight;
+                tab.url = url;
+            }
+        }
+
+        // Attach to new target if not yet attached
+        let has_session = {
+            let reg = self.tab_registry.lock().await;
+            reg.get(target_id)
+                .map(|t| !t.session_id.is_empty())
+                .unwrap_or(false)
+        };
+
+        if !has_session {
+            let attach_resp = self
+                .send_browser_command(
+                    "Target.attachToTarget",
+                    json!({"targetId": target_id, "flatten": true}),
+                )
+                .await
+                .map_err(|e| format!("switch_tab: attachToTarget failed: {}", e))?;
+
+            let session_id = attach_resp["result"]["sessionId"]
+                .as_str()
+                .ok_or("switch_tab: no sessionId from attachToTarget")?
+                .to_string();
+
+            let mut reg = self.tab_registry.lock().await;
+            let tab = reg.entry(target_id.to_string()).or_default();
+            tab.session_id = session_id;
+        }
+
+        // Switch active target
+        *self.active_target_id.lock().await = target_id.to_string();
+
+        // Restore this tab's state
+        {
+            let reg = self.tab_registry.lock().await;
+            if let Some(tab) = reg.get(target_id) {
+                *self.ax_ref_cache.lock().await = tab.ax_ref_cache.clone();
+                *self.inflight_requests.lock().await = tab.inflight_requests;
+                *self.current_url.lock().await = tab.url.clone();
+            }
+        }
+
+        // Enable CDP domains in the new session
+        // (idempotent — safe to call multiple times)
+        self.send_command("Page.enable", json!({})).await?;
+        self.send_command("Runtime.enable", json!({})).await?;
+        self.send_command("Network.enable", json!({})).await?;
+        self.send_command("Log.enable", json!({})).await?;
+
+        // Clear AX ref cache (page may have changed)
+        self.ax_ref_cache.lock().await.clear();
+        *self.active_frame_id.lock().await = None;
+
+        tracing::info!("Switched to tab: {}", target_id);
+        Ok(())
+    }
+
+    /// List all known browser tabs.
+    pub async fn list_tabs(&self) -> Result<Vec<crate::agent::types::TabInfo>, String> {
+        // Use Target.getTargets for fresh data
+        let result = self
+            .send_browser_command("Target.getTargets", json!({}))
+            .await?;
+        let target_infos = result["result"]["targetInfos"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+
+        let active_target = self.active_target_id.lock().await.clone();
+        let tabs: Vec<crate::agent::types::TabInfo> = target_infos
             .iter()
-            .filter(|t| {
-                t.get("type").and_then(|v| v.as_str()) == Some("page")
-            })
-            .map(|t| TabInfo {
-                id: t.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-                url: t.get("url").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-                title: t.get("title").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-                target_type: "page".to_string(),
-                active: false,
+            .filter(|t| t["type"].as_str() == Some("page"))
+            .map(|t| {
+                let id = t["targetId"].as_str().unwrap_or("").to_string();
+                let is_active = id == active_target;
+                crate::agent::types::TabInfo {
+                    id: id.clone(),
+                    url: t["url"].as_str().unwrap_or("").to_string(),
+                    title: t["title"].as_str().unwrap_or("").to_string(),
+                    target_type: "page".to_string(),
+                    active: is_active,
+                }
             })
             .collect();
         Ok(tabs)
     }
 
-    /// Open a new tab with a URL via /json/new endpoint.
-    /// Note: /json/new requires PUT method, not GET.
-    pub async fn new_tab(&self, url: &str) -> Result<TabInfo, String> {
-        let endpoint = format!("http://localhost:{}/json/new?{}", self.cdp_port, url);
-        let resp = reqwest::Client::new()
-            .put(&endpoint)
-            .send()
-            .await
-            .map_err(|e| format!("Failed to create new tab: {}", e))?;
-        let target: serde_json::Value = resp
-            .json()
-            .await
-            .map_err(|e| format!("Failed to parse new tab response: {}", e))?;
-        Ok(TabInfo {
-            id: target.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-            url: target.get("url").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-            title: target.get("title").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+    /// Open a new tab with the given URL and switch to it.
+    pub async fn new_tab(&self, url: &str) -> Result<crate::agent::types::TabInfo, String> {
+        let result = self
+            .send_browser_command(
+                "Target.createTarget",
+                json!({"url": url}),
+            )
+            .await?;
+        let target_id = result["result"]["targetId"]
+            .as_str()
+            .ok_or("new_tab: no targetId from createTarget")?
+            .to_string();
+
+        // Small delay to let the target initialize before attaching
+        tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+
+        self.switch_tab(&target_id).await?;
+
+        Ok(crate::agent::types::TabInfo {
+            id: target_id,
+            url: url.to_string(),
+            title: String::new(),
             target_type: "page".to_string(),
-            active: false,
+            active: true,
         })
     }
 
-    /// Close a tab by its target ID via /json/close endpoint.
+    /// Close a tab by target_id. If it is the active tab, switches to another tab if available.
     pub async fn close_tab(&self, target_id: &str) -> Result<(), String> {
-        let endpoint = format!(
-            "http://localhost:{}/json/close/{}",
-            self.cdp_port, target_id
-        );
-        reqwest::get(&endpoint)
-            .await
-            .map_err(|e| format!("Failed to close tab: {}", e))?;
-        Ok(())
-    }
+        self.send_browser_command(
+            "Target.closeTarget",
+            json!({"targetId": target_id}),
+        )
+        .await?;
 
-    /// Activate (switch to) a tab by its target ID via /json/activate endpoint.
-    pub async fn switch_tab(&self, target_id: &str) -> Result<(), String> {
-        let endpoint = format!(
-            "http://localhost:{}/json/activate/{}",
-            self.cdp_port, target_id
-        );
-        reqwest::get(&endpoint)
-            .await
-            .map_err(|e| format!("Failed to switch tab: {}", e))?;
+        self.tab_registry.lock().await.remove(target_id);
+
+        // If we closed the active tab, switch to another if available
+        let active = self.active_target_id.lock().await.clone();
+        if active == target_id {
+            let other = self
+                .tab_registry
+                .lock()
+                .await
+                .keys()
+                .next()
+                .cloned();
+            if let Some(other_id) = other {
+                let _ = self.switch_tab(&other_id).await;
+            } else {
+                *self.active_target_id.lock().await = String::new();
+            }
+        }
+
+        tracing::info!("Closed tab: {}", target_id);
         Ok(())
     }
 
