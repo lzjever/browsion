@@ -1781,6 +1781,125 @@ impl CDPClient {
         Ok(())
     }
 
+    /// Generate a PDF of the current page.
+    /// Returns base64-encoded PDF data.
+    /// `landscape`: print in landscape orientation (default false)
+    /// `print_background`: include CSS backgrounds (default true)
+    /// `scale`: scale factor 0.1-2.0 (default 1.0)
+    pub async fn print_to_pdf(
+        &self,
+        landscape: bool,
+        print_background: bool,
+        scale: f64,
+    ) -> Result<String, String> {
+        let result = self
+            .send_command(
+                "Page.printToPDF",
+                json!({
+                    "landscape": landscape,
+                    "printBackground": print_background,
+                    "scale": scale,
+                    "paperWidth": 8.5,
+                    "paperHeight": 11.0,
+                    "marginTop": 0.4,
+                    "marginBottom": 0.4,
+                    "marginLeft": 0.4,
+                    "marginRight": 0.4
+                }),
+            )
+            .await?;
+
+        result["result"]["data"]
+            .as_str()
+            .map(|s| s.to_string())
+            .ok_or_else(|| "print_to_pdf: no data in response".to_string())
+    }
+
+    // ── Touch events ─────────────────────────────────────────────────────────
+
+    /// Tap an element by CSS selector using touch events.
+    /// Use for mobile-emulated pages or apps with touch-only handlers.
+    pub async fn tap(&self, selector: &str) -> Result<(), String> {
+        let (cx, cy) = self.get_element_center(selector).await?;
+        self.tap_at(cx, cy).await?;
+        tracing::debug!("Tapped element: {}", selector);
+        Ok(())
+    }
+
+    /// Tap at specific viewport coordinates.
+    pub async fn tap_at(&self, x: f64, y: f64) -> Result<(), String> {
+        let touch_point = json!([{
+            "x": x,
+            "y": y,
+            "radiusX": 1,
+            "radiusY": 1,
+            "rotationAngle": 0.0,
+            "force": 1.0,
+            "id": 0
+        }]);
+        self.send_command("Input.dispatchTouchEvent", json!({
+            "type": "touchStart",
+            "touchPoints": touch_point,
+            "modifiers": 0
+        })).await?;
+        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+        self.send_command("Input.dispatchTouchEvent", json!({
+            "type": "touchEnd",
+            "touchPoints": [],
+            "modifiers": 0
+        })).await?;
+        Ok(())
+    }
+
+    /// Swipe from element center in a direction (up/down/left/right) by `distance` pixels.
+    /// Uses touch events with smooth intermediate moves.
+    pub async fn swipe(
+        &self,
+        selector: &str,
+        direction: &str,
+        distance: f64,
+    ) -> Result<(), String> {
+        let (start_x, start_y) = self.get_element_center(selector).await?;
+        let (end_x, end_y) = match direction {
+            "up" => (start_x, start_y - distance),
+            "down" => (start_x, start_y + distance),
+            "left" => (start_x - distance, start_y),
+            "right" => (start_x + distance, start_y),
+            _ => (start_x, start_y - distance),
+        };
+
+        // Touch start
+        self.send_command("Input.dispatchTouchEvent", json!({
+            "type": "touchStart",
+            "touchPoints": [{"x": start_x, "y": start_y, "id": 0, "force": 1.0}],
+            "modifiers": 0
+        })).await?;
+
+        // Move in steps
+        const STEPS: u32 = 10;
+        for i in 1..=STEPS {
+            let t = i as f64 / STEPS as f64;
+            let mx = start_x + (end_x - start_x) * t;
+            let my = start_y + (end_y - start_y) * t;
+            self.send_command("Input.dispatchTouchEvent", json!({
+                "type": "touchMove",
+                "touchPoints": [{"x": mx, "y": my, "id": 0, "force": 1.0}],
+                "modifiers": 0
+            })).await?;
+            tokio::time::sleep(tokio::time::Duration::from_millis(16)).await;
+        }
+
+        // Touch end
+        self.send_command("Input.dispatchTouchEvent", json!({
+            "type": "touchEnd",
+            "touchPoints": [],
+            "modifiers": 0
+        })).await?;
+
+        tracing::debug!("Swiped element '{}' {} by {}px", selector, direction, distance);
+        Ok(())
+    }
+
     // ── Dialog handling ─────────────────────────────────────────────
 
     /// Handle a JavaScript dialog (alert / confirm / prompt).
@@ -1813,6 +1932,61 @@ impl CDPClient {
     /// Clear the network log.
     pub async fn clear_network_log(&self) {
         self.network_log.lock().await.clear();
+    }
+
+    // ── Network Interception ────────────────────────────────────────────────
+
+    /// Block requests whose URL contains `url_pattern`.
+    /// Enables the Fetch domain automatically on first call.
+    pub async fn block_url(&self, url_pattern: &str) -> Result<(), String> {
+        self.ensure_fetch_enabled().await?;
+        let rule = crate::agent::types::InterceptRule {
+            url_pattern: url_pattern.to_string(),
+            action: crate::agent::types::InterceptAction::Block,
+        };
+        self.intercept_rules.lock().await.push(rule);
+        tracing::debug!("Added block rule: {}", url_pattern);
+        Ok(())
+    }
+
+    /// Mock a URL pattern with a synthetic response.
+    pub async fn mock_url(
+        &self,
+        url_pattern: &str,
+        status: u16,
+        body: &str,
+        content_type: &str,
+    ) -> Result<(), String> {
+        self.ensure_fetch_enabled().await?;
+        let rule = crate::agent::types::InterceptRule {
+            url_pattern: url_pattern.to_string(),
+            action: crate::agent::types::InterceptAction::Mock {
+                status,
+                body: body.to_string(),
+                content_type: content_type.to_string(),
+            },
+        };
+        self.intercept_rules.lock().await.push(rule);
+        tracing::debug!("Added mock rule: {} -> {}", url_pattern, status);
+        Ok(())
+    }
+
+    /// Remove all intercept rules. Disables the Fetch domain.
+    pub async fn clear_intercepts(&self) -> Result<(), String> {
+        self.intercept_rules.lock().await.clear();
+        self.send_command("Fetch.disable", json!({})).await?;
+        tracing::debug!("Cleared all intercept rules");
+        Ok(())
+    }
+
+    /// Enable the Fetch domain if not already enabled (idempotent).
+    async fn ensure_fetch_enabled(&self) -> Result<(), String> {
+        self.send_command(
+            "Fetch.enable",
+            json!({"handleAuthRequests": false}),
+        )
+        .await?;
+        Ok(())
     }
 
     // ── DOM context ─────────────────────────────────────────────────
@@ -1953,17 +2127,41 @@ impl CDPClient {
         Ok(serde_json::Value::Object(result))
     }
 
+    /// Get the full visible text content of the page body.
+    /// Returns document.body.innerText — clean text as seen by the user, no HTML tags.
+    /// Useful for AI agents reading page content or verifying text presence.
+    /// Truncated to 50,000 characters to keep responses manageable.
+    pub async fn get_page_text(&self) -> Result<String, String> {
+        let js = r#"(function() {
+            try {
+                const text = document.body ? document.body.innerText : '';
+                return text.length > 50000 ? text.substring(0, 50000) + '\n[truncated]' : text;
+            } catch(e) {
+                return '';
+            }
+        })()"#;
+        let result = self.evaluate_js(js).await?;
+        Ok(result.as_str().unwrap_or("").to_string())
+    }
+
     /// Evaluate arbitrary JavaScript and return the stringified result.
     pub async fn evaluate_js(&self, expression: &str) -> Result<serde_json::Value, String> {
+        let mut params = json!({
+            "expression": expression,
+            "returnByValue": true,
+            "awaitPromise": true
+        });
+
+        // If switched to a frame, use its execution context
+        if let Some(frame_id) = &*self.active_frame_id.lock().await {
+            let contexts = self.frame_contexts.lock().await;
+            if let Some(ctx_id) = contexts.get(frame_id) {
+                params["contextId"] = json!(ctx_id);
+            }
+        }
+
         let result = self
-            .send_command(
-                "Runtime.evaluate",
-                json!({
-                    "expression": expression,
-                    "returnByValue": true,
-                    "awaitPromise": true
-                }),
-            )
+            .send_command("Runtime.evaluate", params)
             .await?;
 
         let value = result
@@ -2665,6 +2863,55 @@ impl CDPClient {
             "accuracy": accuracy,
         })).await?;
         Ok(())
+    }
+
+    // ── Frames ────────────────────────────────────────────────────────────────
+
+    /// List all frames in the current page (main frame + iframes).
+    pub async fn get_frames(&self) -> Result<Vec<crate::agent::types::FrameInfo>, String> {
+        let result = self.send_command("Page.getFrameTree", json!({})).await?;
+        let frame_tree = &result["result"]["frameTree"];
+
+        fn parse_frame(frame: &serde_json::Value) -> Vec<crate::agent::types::FrameInfo> {
+            let mut frames = Vec::new();
+            let f = &frame["frame"];
+            frames.push(crate::agent::types::FrameInfo {
+                id: f["id"].as_str().unwrap_or("").to_string(),
+                url: f["url"].as_str().unwrap_or("").to_string(),
+                name: f["name"].as_str().filter(|s| !s.is_empty()).map(|s| s.to_string()),
+                parent_id: f["parentId"].as_str().map(|s| s.to_string()),
+            });
+            if let Some(children) = frame["childFrames"].as_array() {
+                for child in children {
+                    frames.extend(parse_frame(child));
+                }
+            }
+            frames
+        }
+
+        Ok(parse_frame(frame_tree))
+    }
+
+    /// Switch the JS execution context to a specific iframe (by frame_id from get_frames).
+    /// After switching, evaluate_js and selector-based tools operate inside that frame.
+    /// Only works for same-origin frames (browser security policy).
+    pub async fn switch_frame(&self, frame_id: &str) -> Result<(), String> {
+        let has_context = self.frame_contexts.lock().await.contains_key(frame_id);
+        if !has_context {
+            return Err(format!(
+                "Frame '{}' not found or not yet loaded. Call get_frames first.",
+                frame_id
+            ));
+        }
+        *self.active_frame_id.lock().await = Some(frame_id.to_string());
+        tracing::debug!("Switched to frame: {}", frame_id);
+        Ok(())
+    }
+
+    /// Switch back to the main frame context.
+    pub async fn main_frame(&self) {
+        *self.active_frame_id.lock().await = None;
+        tracing::debug!("Switched back to main frame");
     }
 
     // ── Storage (localStorage / sessionStorage) ─────────────────────────────
