@@ -1156,6 +1156,26 @@ impl CDPClient {
         }
     }
 
+    /// Wait until the page URL contains `pattern`.
+    /// Returns the current URL when matched.
+    /// Essential for SPA navigation (React Router, Vue Router).
+    pub async fn wait_for_url(&self, pattern: &str, timeout_ms: u64) -> Result<String, String> {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(timeout_ms);
+        loop {
+            if std::time::Instant::now() > deadline {
+                return Err(format!("wait_for_url: URL matching '{}' not found within {}ms", pattern, timeout_ms));
+            }
+            if let Ok(val) = self.evaluate_js("window.location.href").await {
+                if let Some(href) = val.as_str() {
+                    if href.contains(pattern) {
+                        return Ok(href.to_string());
+                    }
+                }
+            }
+            tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+        }
+    }
+
     // ── Screenshot ──────────────────────────────────────────────────
 
     /// Take a screenshot.

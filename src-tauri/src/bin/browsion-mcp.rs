@@ -401,6 +401,17 @@ struct WaitForTextParam {
 }
 fn default_wait_for_text_timeout() -> u64 { 30000 }
 
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct WaitForUrlParam {
+    /// Browser session ID (profile_id from list_profiles)
+    profile_id: String,
+    /// URL substring/pattern to wait for (e.g. "/dashboard" or "?success=true")
+    pattern: String,
+    /// Timeout in milliseconds (default 15000)
+    #[serde(default)]
+    timeout_ms: Option<u64>,
+}
+
 // ── Emulation ────────────────────────────────────────────────────────────────
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -1377,7 +1388,24 @@ impl BrowsionMcpServer {
         Self::text_result(body)
     }
 
-    // ── 18. Utility ───────────────────────────────────────────────────────
+    // ── 18. URL Wait ──────────────────────────────────────────────────────
+
+    /// Wait until the page URL contains a specific pattern
+    #[tool(description = "Wait until the page URL contains a specific pattern. Returns the current URL when matched. Essential for SPA navigation (React Router, Vue Router) where URL changes don't trigger page loads.")]
+    async fn wait_for_url(
+        &self,
+        Parameters(p): Parameters<WaitForUrlParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let body = self
+            .api_post(
+                &format!("/api/browser/{}/wait_for_url", p.profile_id),
+                &json!({ "pattern": p.pattern, "timeout_ms": p.timeout_ms.unwrap_or(15000) }),
+            )
+            .await?;
+        Self::text_result(body)
+    }
+
+    // ── 19. Utility ───────────────────────────────────────────────────────
 
     /// Wait for a fixed duration
     #[tool(description = "Pause for a fixed number of milliseconds. Prefer wait_for_element, wait_for_text, or wait_for_navigation over fixed waits when possible.")]
@@ -1511,7 +1539,7 @@ impl ServerHandler for BrowsionMcpServer {
                  **Mouse:** click, hover, double_click, right_click, click_at, drag\n\
                  **Keyboard/Input:** type_text, slow_type, press_key\n\
                  **Forms:** select_option, upload_file\n\
-                 **Scroll/Wait:** scroll, scroll_into_view, wait_for_element, wait_for_text\n\
+                 **Scroll/Wait:** scroll, scroll_into_view, wait_for_element, wait_for_text, wait_for_url\n\
                  **Observe (recommended):** get_page_state, get_ax_tree, screenshot\n\
                  **AX-Ref Actions:** click_ref, type_ref, focus_ref\n\
                  **DOM (legacy):** get_dom_context, extract_data\n\

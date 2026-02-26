@@ -106,6 +106,7 @@ pub fn router(state: ApiState) -> Router {
         .route("/api/browser/:id/wait_for_text", post(browser_wait_for_text))
         .route("/api/browser/:id/emulate", post(browser_emulate))
         .route("/api/browser/:id/scroll_element", post(browser_scroll_element))
+        .route("/api/browser/:id/wait_for_url", post(browser_wait_for_url))
         // Advanced: Storage (localStorage / sessionStorage)
         .route("/api/browser/:id/storage", get(browser_get_storage).post(browser_set_storage).delete(browser_clear_storage))
         // Utility
@@ -1158,6 +1159,25 @@ async fn browser_wait_for_text(
         .await
         .map_err(cdp_err)?;
     Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+#[derive(serde::Deserialize)]
+struct WaitForUrlReq {
+    pattern: String,
+    #[serde(default = "default_timeout_ms")]
+    timeout_ms: u64,
+}
+
+async fn browser_wait_for_url(
+    State(state): State<ApiState>,
+    AxumPath(id): AxumPath<String>,
+    Json(req): Json<WaitForUrlReq>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let cdp_port = require_cdp_port(&state, &id)?;
+    let handle = state.session_manager.get_client(&id, cdp_port).await.map_err(cdp_err)?;
+    let client = handle.lock().await;
+    let url = client.wait_for_url(&req.pattern, req.timeout_ms).await.map_err(cdp_err)?;
+    Ok(Json(serde_json::json!({ "url": url })))
 }
 
 async fn browser_emulate(
