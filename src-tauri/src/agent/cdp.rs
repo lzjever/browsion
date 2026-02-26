@@ -33,6 +33,8 @@ pub struct CDPClient {
     ax_ref_cache: Arc<Mutex<HashMap<String, i64>>>,
     /// Persistent network request log (max 200 entries). Filled by WS reader.
     network_log: Arc<Mutex<VecDeque<serde_json::Value>>>,
+    /// Inflight network requests count (for networkidle detection)
+    inflight_requests: Arc<Mutex<u32>>,
     /// Chrome process ID
     chrome_pid: Option<u32>,
     /// Profile being used
@@ -54,6 +56,7 @@ impl CDPClient {
             events: Arc::new(Mutex::new(HashMap::new())),
             ax_ref_cache: Arc::new(Mutex::new(HashMap::new())),
             network_log: Arc::new(Mutex::new(VecDeque::new())),
+            inflight_requests: Arc::new(Mutex::new(0)),
             chrome_pid: None,
             profile_id,
             current_url: Arc::new(Mutex::new(String::new())),
@@ -72,6 +75,7 @@ impl CDPClient {
             events: Arc::new(Mutex::new(HashMap::new())),
             ax_ref_cache: Arc::new(Mutex::new(HashMap::new())),
             network_log: Arc::new(Mutex::new(VecDeque::new())),
+            inflight_requests: Arc::new(Mutex::new(0)),
             chrome_pid: None, // not owned; won't kill on drop
             profile_id,
             current_url: Arc::new(Mutex::new(String::new())),
@@ -156,6 +160,7 @@ impl CDPClient {
         let responses = self.responses.clone();
         let events = self.events.clone();
         let network_log = self.network_log.clone();
+        let inflight_clone = self.inflight_requests.clone();
         tokio::spawn(async move {
             while let Some(msg) = StreamExt::next(&mut rx).await {
                 match msg {
@@ -193,6 +198,8 @@ impl CDPClient {
                                             "method": req_method,
                                             "requestId": request_id
                                         }));
+                                        let mut count = inflight_clone.lock().await;
+                                        *count = count.saturating_add(1);
                                     }
                                     "Network.responseReceived" => {
                                         let url = params.get("response").and_then(|r| r.get("url")).and_then(|v| v.as_str()).unwrap_or("").to_string();
@@ -208,6 +215,12 @@ impl CDPClient {
                                             "mimeType": mime,
                                             "requestId": request_id
                                         }));
+                                        let mut count = inflight_clone.lock().await;
+                                        *count = count.saturating_sub(1);
+                                    }
+                                    "Network.loadingFailed" => {
+                                        let mut count = inflight_clone.lock().await;
+                                        *count = count.saturating_sub(1);
                                     }
                                     _ => {}
                                 }
@@ -360,7 +373,7 @@ impl CDPClient {
     }
 
     /// Navigate with explicit wait strategy and timeout.
-    /// `wait_until`: "load" | "domcontentloaded" | "none"
+    /// `wait_until`: "load" | "domcontentloaded" | "networkidle" | "none"
     pub async fn navigate_wait(
         &self,
         url: &str,
@@ -369,11 +382,14 @@ impl CDPClient {
     ) -> Result<(), String> {
         // Subscribe to event BEFORE sending navigate to avoid race conditions
         let event_rx = match wait_until {
-            "load" | "networkidle" => {
+            "load" => {
                 Some(self.subscribe_event("Page.loadEventFired").await?)
             }
             "domcontentloaded" => {
                 Some(self.subscribe_event("Page.domContentEventFired").await?)
+            }
+            "networkidle" => {
+                Some(self.subscribe_event("Page.loadEventFired").await?)
             }
             _ => None,
         };
@@ -386,7 +402,34 @@ impl CDPClient {
         // Clear AX ref cache on navigation
         self.ax_ref_cache.lock().await.clear();
 
-        if let Some(rx) = event_rx {
+        if wait_until == "networkidle" {
+            // Wait for load event first
+            if let Some(rx) = event_rx {
+                let _ = tokio::time::timeout(tokio::time::Duration::from_millis(timeout_ms), rx).await;
+            }
+            // Then wait until inflight == 0 for 500ms consecutively
+            let idle_target = std::time::Duration::from_millis(500);
+            let deadline = std::time::Instant::now() + std::time::Duration::from_millis(timeout_ms);
+            let mut idle_since: Option<std::time::Instant> = None;
+            loop {
+                if std::time::Instant::now() > deadline {
+                    tracing::warn!("networkidle timeout ({}ms): {}", timeout_ms, url);
+                    break;
+                }
+                let count = *self.inflight_requests.lock().await;
+                if count == 0 {
+                    match idle_since {
+                        None => { idle_since = Some(std::time::Instant::now()); }
+                        Some(t) if t.elapsed() >= idle_target => { break; }
+                        _ => {}
+                    }
+                } else {
+                    idle_since = None;
+                }
+                tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+            }
+            tracing::debug!("Network idle reached: {}", url);
+        } else if let Some(rx) = event_rx {
             match tokio::time::timeout(tokio::time::Duration::from_millis(timeout_ms), rx).await {
                 Ok(_) => tracing::debug!("Navigation complete: {}", url),
                 Err(_) => tracing::warn!("Navigation timeout ({}ms): {}", timeout_ms, url),
