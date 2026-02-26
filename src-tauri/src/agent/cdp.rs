@@ -1948,6 +1948,7 @@ impl CDPClient {
                 url: t.get("url").and_then(|v| v.as_str()).unwrap_or("").to_string(),
                 title: t.get("title").and_then(|v| v.as_str()).unwrap_or("").to_string(),
                 target_type: "page".to_string(),
+                active: false,
             })
             .collect();
         Ok(tabs)
@@ -1971,6 +1972,7 @@ impl CDPClient {
             url: target.get("url").and_then(|v| v.as_str()).unwrap_or("").to_string(),
             title: target.get("title").and_then(|v| v.as_str()).unwrap_or("").to_string(),
             target_type: "page".to_string(),
+            active: false,
         })
     }
 
