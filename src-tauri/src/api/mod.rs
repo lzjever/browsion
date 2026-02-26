@@ -104,6 +104,7 @@ pub fn router(state: ApiState) -> Router {
         .route("/api/browser/:id/network_log", get(browser_network_log))
         .route("/api/browser/:id/network_log/clear", post(browser_clear_network_log))
         .route("/api/browser/:id/wait_for_text", post(browser_wait_for_text))
+        .route("/api/browser/:id/emulate", post(browser_emulate))
         // Utility
         .route("/api/health", get(health))
         .with_state(state)
@@ -1105,6 +1106,21 @@ struct WaitForTextReq {
     timeout_ms: Option<u64>,
 }
 
+#[derive(serde::Deserialize)]
+struct EmulateReq {
+    // Viewport
+    width: Option<u32>,
+    height: Option<u32>,
+    device_scale_factor: Option<f64>,
+    mobile: Option<bool>,
+    // User agent
+    user_agent: Option<String>,
+    // Geolocation
+    latitude: Option<f64>,
+    longitude: Option<f64>,
+    accuracy: Option<f64>,
+}
+
 async fn browser_wait_for_text(
     State(state): State<ApiState>,
     AxumPath(id): AxumPath<String>,
@@ -1117,6 +1133,33 @@ async fn browser_wait_for_text(
         .wait_for_text(&body.text, body.timeout_ms.unwrap_or(30000))
         .await
         .map_err(cdp_err)?;
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+async fn browser_emulate(
+    State(state): State<ApiState>,
+    AxumPath(id): AxumPath<String>,
+    Json(req): Json<EmulateReq>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let cdp_port = require_cdp_port(&state, &id)?;
+    let handle = state.session_manager.get_client(&id, cdp_port).await.map_err(cdp_err)?;
+    let client = handle.lock().await;
+
+    if req.width.is_some() || req.height.is_some() {
+        let w = req.width.unwrap_or(1280);
+        let h = req.height.unwrap_or(800);
+        let dpr = req.device_scale_factor.unwrap_or(1.0);
+        let mobile = req.mobile.unwrap_or(false);
+        client.set_viewport(w, h, dpr, mobile).await.map_err(cdp_err)?;
+    }
+    if let Some(ua) = &req.user_agent {
+        client.set_user_agent(ua).await.map_err(cdp_err)?;
+    }
+    if let (Some(lat), Some(lon)) = (req.latitude, req.longitude) {
+        let accuracy = req.accuracy.unwrap_or(100.0);
+        client.set_geolocation(lat, lon, accuracy).await.map_err(cdp_err)?;
+    }
+
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 

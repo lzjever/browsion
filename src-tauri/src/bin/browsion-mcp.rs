@@ -387,6 +387,38 @@ struct WaitForTextParam {
 }
 fn default_wait_for_text_timeout() -> u64 { 30000 }
 
+// ── Emulation ────────────────────────────────────────────────────────────────
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct EmulateParam {
+    /// Browser session ID (profile_id from list_profiles)
+    profile_id: String,
+    /// Viewport width in pixels (e.g. 375 for iPhone)
+    #[serde(default)]
+    width: Option<u32>,
+    /// Viewport height in pixels (e.g. 812 for iPhone 14)
+    #[serde(default)]
+    height: Option<u32>,
+    /// Device pixel ratio (e.g. 3.0 for Retina displays)
+    #[serde(default)]
+    device_scale_factor: Option<f64>,
+    /// Emulate mobile device (enables touch events and mobile UA hints)
+    #[serde(default)]
+    mobile: Option<bool>,
+    /// Override User-Agent string
+    #[serde(default)]
+    user_agent: Option<String>,
+    /// GPS latitude (-90 to 90)
+    #[serde(default)]
+    latitude: Option<f64>,
+    /// GPS longitude (-180 to 180)
+    #[serde(default)]
+    longitude: Option<f64>,
+    /// GPS accuracy in meters (default 100)
+    #[serde(default)]
+    accuracy: Option<f64>,
+}
+
 // ---------------------------------------------------------------------------
 // MCP Server
 // ---------------------------------------------------------------------------
@@ -1273,6 +1305,32 @@ impl BrowsionMcpServer {
     ) -> Result<CallToolResult, McpError> {
         tokio::time::sleep(tokio::time::Duration::from_millis(p.duration_ms)).await;
         Self::text_result(format!("Waited {}ms", p.duration_ms))
+    }
+
+    // ── 19. Device Emulation ──────────────────────────────────────────────
+
+    /// Emulate device settings: viewport, user agent, geolocation
+    #[tool(description = "Emulate device settings: viewport size, user agent, and geolocation. Supports mobile device simulation. Example: {width:375, height:812, mobile:true} emulates a mobile phone viewport.")]
+    async fn emulate(
+        &self,
+        Parameters(p): Parameters<EmulateParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let body = self
+            .api_post(
+                &format!("/api/browser/{}/emulate", p.profile_id),
+                &json!({
+                    "width": p.width,
+                    "height": p.height,
+                    "device_scale_factor": p.device_scale_factor,
+                    "mobile": p.mobile,
+                    "user_agent": p.user_agent,
+                    "latitude": p.latitude,
+                    "longitude": p.longitude,
+                    "accuracy": p.accuracy,
+                }),
+            )
+            .await?;
+        Self::text_result(body)
     }
 }
 

@@ -2031,6 +2031,37 @@ impl CDPClient {
         Ok(())
     }
 
+    // ── Emulation ───────────────────────────────────────────────────
+
+    /// Set viewport size and mobile emulation.
+    pub async fn set_viewport(&self, width: u32, height: u32, device_scale_factor: f64, mobile: bool) -> Result<(), String> {
+        self.send_command("Emulation.setDeviceMetricsOverride", json!({
+            "width": width,
+            "height": height,
+            "deviceScaleFactor": device_scale_factor,
+            "mobile": mobile,
+        })).await?;
+        Ok(())
+    }
+
+    /// Override the User-Agent string.
+    pub async fn set_user_agent(&self, user_agent: &str) -> Result<(), String> {
+        self.send_command("Network.setUserAgentOverride", json!({
+            "userAgent": user_agent,
+        })).await?;
+        Ok(())
+    }
+
+    /// Override geolocation coordinates.
+    pub async fn set_geolocation(&self, latitude: f64, longitude: f64, accuracy: f64) -> Result<(), String> {
+        self.send_command("Emulation.setGeolocationOverride", json!({
+            "latitude": latitude,
+            "longitude": longitude,
+            "accuracy": accuracy,
+        })).await?;
+        Ok(())
+    }
+
     // ── Close ───────────────────────────────────────────────────────
 
     /// Close the browser
