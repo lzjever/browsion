@@ -1,12 +1,82 @@
-use chrono::Datelike;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::path::PathBuf;
+
+/// How the app obtains the Chrome binary: CfT (default) or custom path (e.g. ungoogled).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum BrowserSource {
+    /// Use Chrome for Testing (official); download via in-app UX.
+    ChromeForTesting {
+        /// Release channel (default: Stable).
+        #[serde(default = "default_cft_channel")]
+        channel: CftChannel,
+        /// Exact version string (e.g. "145.0.7632.117"). If None, use latest for channel.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        version: Option<String>,
+        /// Directory to download and extract CfT zips.
+        #[serde(default = "default_cft_download_dir")]
+        download_dir: PathBuf,
+    },
+    /// Use a custom Chrome/Chromium executable (e.g. ungoogled). Fingerprint/profile options apply.
+    Custom {
+        path: PathBuf,
+        /// When true, this is adryfish/fingerprint-chromium; profile supports --fingerprint, --timezone, --lang.
+        #[serde(default)]
+        fingerprint_chromium: bool,
+    },
+}
+
+fn default_cft_channel() -> CftChannel {
+    CftChannel::Stable
+}
+
+fn default_cft_download_dir() -> PathBuf {
+    dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".browsion")
+        .join("cft")
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "PascalCase")]
+pub enum CftChannel {
+    #[default]
+    Stable,
+    Beta,
+    Dev,
+    Canary,
+}
+
+impl CftChannel {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            CftChannel::Stable => "Stable",
+            CftChannel::Beta => "Beta",
+            CftChannel::Dev => "Dev",
+            CftChannel::Canary => "Canary",
+        }
+    }
+}
+
+impl Default for BrowserSource {
+    fn default() -> Self {
+        Self::ChromeForTesting {
+            channel: CftChannel::Stable,
+            version: None,
+            download_dir: default_cft_download_dir(),
+        }
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
-    /// Chrome executable path
-    pub chrome_path: PathBuf,
+    /// Where to get the Chrome binary: CfT (default) or custom path.
+    #[serde(default)]
+    pub browser_source: BrowserSource,
+
+    /// Legacy: if present on load, migrated to browser_source = Custom(path). Not serialized.
+    #[serde(skip_serializing, default)]
+    pub chrome_path: Option<PathBuf>,
 
     /// Browser profile list
     #[serde(default)]
@@ -20,47 +90,56 @@ pub struct AppConfig {
     #[serde(default)]
     pub recent_profiles: Vec<String>,
 
-    /// AI configuration for agent
+    /// MCP / API server configuration.
     #[serde(default)]
-    pub ai: AIConfig,
+    pub mcp: McpConfig,
 
-    /// Task templates
-    #[serde(default)]
-    pub templates: Vec<TaskTemplate>,
-
-    /// Scheduled tasks
-    #[serde(default)]
-    pub scheduled_tasks: Vec<ScheduledTask>,
+    /// Legacy: migrated into mcp.api_port on load. Not serialized.
+    #[serde(skip_serializing, default)]
+    pub api_port: Option<u16>,
 }
 
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
-            chrome_path: Self::default_chrome_path(),
+            browser_source: BrowserSource::default(),
+            chrome_path: None,
             profiles: Vec::new(),
             settings: AppSettings::default(),
             recent_profiles: Vec::new(),
-            ai: AIConfig::default(),
-            templates: Vec::new(),
-            scheduled_tasks: Vec::new(),
+            mcp: McpConfig::default(),
+            api_port: None,
         }
     }
 }
 
-impl AppConfig {
-    /// Get default Chrome path based on platform
-    fn default_chrome_path() -> PathBuf {
-        #[cfg(target_os = "windows")]
-        {
-            PathBuf::from("C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe")
-        }
-        #[cfg(target_os = "macos")]
-        {
-            PathBuf::from("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
-        }
-        #[cfg(target_os = "linux")]
-        {
-            PathBuf::from("/usr/bin/google-chrome")
+/// MCP / API server configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct McpConfig {
+    /// Whether the API server is enabled.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+
+    /// Port for the local HTTP API. Default 38472.
+    #[serde(default = "default_mcp_port")]
+    pub api_port: u16,
+
+    /// Optional API key. When set, all requests (except /api/health) must
+    /// include `X-API-Key: <key>` header.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub api_key: Option<String>,
+}
+
+fn default_mcp_port() -> u16 {
+    38472
+}
+
+impl Default for McpConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            api_port: default_mcp_port(),
+            api_key: None,
         }
     }
 }
@@ -107,6 +186,10 @@ pub struct BrowserProfile {
     /// Tags for categorization and filtering
     #[serde(default)]
     pub tags: Vec<String>,
+
+    /// Launch Chrome in headless mode (no visible window). Default false.
+    #[serde(default)]
+    pub headless: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -134,6 +217,9 @@ pub struct ProcessInfo {
     pub profile_id: String,
     pub pid: u32,
     pub launched_at: u64, // Unix timestamp
+    /// CDP remote-debugging port (if browser was launched with --remote-debugging-port).
+    #[serde(default)]
+    pub cdp_port: Option<u16>,
 }
 
 fn default_lang() -> String {
@@ -144,312 +230,86 @@ fn default_true() -> bool {
     true
 }
 
-// ==================== AI Configuration ====================
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-/// AI provider configuration
-/// API type for the provider
-#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
-#[serde(rename_all = "lowercase")]
-pub enum ApiType {
-    #[default]
-    Openai,
-    Anthropic,
-    Ollama,
-}
-
-/// AI Provider configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ProviderConfig {
-    /// Display name for this provider
-    pub name: String,
-    /// API type (determines request format)
-    #[serde(default)]
-    pub api_type: ApiType,
-    /// Base URL for the API
-    pub base_url: String,
-    /// API key (optional for local providers like Ollama)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub api_key: Option<String>,
-    /// Available models for this provider
-    #[serde(default)]
-    pub models: Vec<String>,
-}
-
-/// AI configuration for the agent
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AIConfig {
-    /// Default LLM model to use (format: "provider_id:model_name")
-    #[serde(default)]
-    pub default_llm: Option<String>,
-
-    /// Default VLM model for visual tasks (format: "provider_id:model_name")
-    #[serde(default)]
-    pub default_vlm: Option<String>,
-
-    /// Enable automatic VLM escalation when stuck
-    #[serde(default = "default_true")]
-    pub escalation_enabled: bool,
-
-    /// Maximum retries before escalating
-    #[serde(default = "default_max_retries")]
-    pub max_retries: u32,
-
-    /// Task timeout in seconds
-    #[serde(default = "default_timeout")]
-    pub timeout_seconds: u64,
-
-    /// AI providers configuration (key = provider id, value = config)
-    #[serde(default)]
-    pub providers: HashMap<String, ProviderConfig>,
-}
-
-fn default_max_retries() -> u32 {
-    3
-}
-
-fn default_timeout() -> u64 {
-    300
-}
-
-impl Default for AIConfig {
-    fn default() -> Self {
-        Self {
-            default_llm: None,
-            default_vlm: None,
-            escalation_enabled: true,
-            max_retries: 3,
-            timeout_seconds: 300,
-            providers: HashMap::new(),
-        }
-    }
-}
-
-/// Task template for reusable automation tasks
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TaskTemplate {
-    /// Unique template ID
-    pub id: String,
-    /// Template name
-    pub name: String,
-    /// Template description
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-    /// Task description (the prompt)
-    pub task: String,
-    /// Default start URL
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub start_url: Option<String>,
-    /// Whether to use headless mode by default
-    #[serde(default)]
-    pub headless: bool,
-    /// Template category
-    #[serde(default)]
-    pub category: TemplateCategory,
-    /// Creation timestamp
-    pub created_at: u64,
-    /// Last used timestamp
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub last_used: Option<u64>,
-    /// Usage count
-    #[serde(default)]
-    pub usage_count: u32,
-}
-
-/// Template category for organization
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(rename_all = "lowercase")]
-pub enum TemplateCategory {
-    #[default]
-    General,
-    Login,
-    Scraping,
-    Form,
-    Navigation,
-    Screenshot,
-    Custom,
-}
-
-impl TaskTemplate {
-    /// Create a new template
-    pub fn new(name: String, task: String) -> Self {
-        Self {
-            id: uuid::Uuid::new_v4().to_string(),
-            name,
-            description: None,
-            task,
-            start_url: None,
-            headless: false,
-            category: TemplateCategory::default(),
-            created_at: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_secs(),
-            last_used: None,
-            usage_count: 0,
-        }
-    }
-}
-
-impl Default for TaskTemplate {
-    fn default() -> Self {
-        Self::new("New Template".to_string(), String::new())
-    }
-}
-
-/// Scheduled task for automated execution
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ScheduledTask {
-    /// Unique task ID
-    pub id: String,
-    /// Task name
-    pub name: String,
-    /// Task description
-    pub task: String,
-    /// Profile IDs to run on
-    pub profile_ids: Vec<String>,
-    /// Schedule configuration
-    pub schedule: ScheduleConfig,
-    /// Whether the schedule is enabled
-    #[serde(default = "default_enabled")]
-    pub enabled: bool,
-    /// Start URL (optional)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub start_url: Option<String>,
-    /// Use headless mode
-    #[serde(default)]
-    pub headless: bool,
-    /// Creation timestamp
-    pub created_at: u64,
-    /// Last run timestamp
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub last_run: Option<u64>,
-    /// Next scheduled run timestamp
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub next_run: Option<u64>,
-    /// Run count
-    #[serde(default)]
-    pub run_count: u32,
-}
-
-fn default_enabled() -> bool {
-    true
-}
-
-/// Schedule configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum ScheduleConfig {
-    /// Run once at specific time
-    Once { datetime: u64 },
-    /// Run every N minutes
-    Interval { minutes: u32 },
-    /// Run daily at specific time
-    Daily { hour: u32, minute: u32 },
-    /// Run weekly on specific day and time
-    Weekly {
-        day_of_week: u32,
-        hour: u32,
-        minute: u32,
-    },
-    /// Cron expression (advanced)
-    Cron { expression: String },
-}
-
-impl ScheduledTask {
-    /// Create a new scheduled task
-    pub fn new(
-        name: String,
-        task: String,
-        profile_ids: Vec<String>,
-        schedule: ScheduleConfig,
-    ) -> Self {
-        let created_at = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
-
-        let next_run = Self::calculate_next_run(&schedule, created_at);
-
-        Self {
-            id: uuid::Uuid::new_v4().to_string(),
-            name,
-            task,
-            profile_ids,
-            schedule,
-            enabled: true,
-            start_url: None,
-            headless: false,
-            created_at,
-            last_run: None,
-            next_run,
-            run_count: 0,
-        }
+    #[test]
+    fn test_app_config_mcp_defaults() {
+        let config = AppConfig::default();
+        assert!(config.mcp.enabled);
+        assert_eq!(config.mcp.api_port, 38472);
+        assert!(config.mcp.api_key.is_none());
     }
 
-    /// Calculate the next run time based on schedule
-    pub fn calculate_next_run(schedule: &ScheduleConfig, from_time: u64) -> Option<u64> {
-        match schedule {
-            ScheduleConfig::Once { datetime } => {
-                if *datetime > from_time {
-                    Some(*datetime)
-                } else {
-                    None
-                }
+    #[test]
+    fn test_browser_source_default_is_cft() {
+        let source = BrowserSource::default();
+        match &source {
+            BrowserSource::ChromeForTesting { channel, version, .. } => {
+                assert_eq!(*channel, CftChannel::Stable);
+                assert!(version.is_none());
             }
-            ScheduleConfig::Interval { minutes } => Some(from_time + (*minutes as u64 * 60)),
-            ScheduleConfig::Daily { hour, minute } => {
-                // Calculate next occurrence of this time
-                let now = chrono::DateTime::from_timestamp(from_time as i64, 0)
-                    .unwrap_or_else(chrono::Utc::now);
-                let next_date = now
-                    .date_naive()
-                    .and_hms_opt(*hour, *minute, 0)
-                    .unwrap()
-                    .and_utc();
-                let next = if next_date <= now {
-                    next_date + chrono::Duration::days(1)
-                } else {
-                    next_date
-                };
-                Some(next.timestamp() as u64)
-            }
-            ScheduleConfig::Weekly {
-                day_of_week,
-                hour,
-                minute,
+            BrowserSource::Custom { .. } => panic!("default should be ChromeForTesting"),
+        }
+    }
+
+    #[test]
+    fn test_browser_source_custom_roundtrip() {
+        let path = PathBuf::from("/tmp/custom-chrome");
+        let source = BrowserSource::Custom {
+            path: path.clone(),
+            fingerprint_chromium: true,
+        };
+        let json = serde_json::to_string(&source).unwrap();
+        assert!(json.contains("custom"));
+        assert!(json.contains("/tmp/custom-chrome"));
+        let decoded: BrowserSource = serde_json::from_str(&json).unwrap();
+        match decoded {
+            BrowserSource::Custom {
+                path: p,
+                fingerprint_chromium: fp,
             } => {
-                let now = chrono::DateTime::from_timestamp(from_time as i64, 0)
-                    .unwrap_or_else(chrono::Utc::now);
-                let days_ahead =
-                    (*day_of_week as i32 - now.weekday().num_days_from_monday() as i32 + 7) % 7;
-                let next = now
-                    .date_naive()
-                    .and_hms_opt(*hour, *minute, 0)
-                    .unwrap()
-                    .and_utc()
-                    + chrono::Duration::days(days_ahead as i64);
-                let next = if next <= now {
-                    next + chrono::Duration::weeks(1)
-                } else {
-                    next
-                };
-                Some(next.timestamp() as u64)
+                assert_eq!(p, path);
+                assert!(fp);
             }
-            ScheduleConfig::Cron { .. } => {
-                // Simplified - just run every hour for cron
-                Some(from_time + 3600)
-            }
+            _ => panic!("expected Custom"),
         }
     }
 
-    /// Update next_run after a run
-    pub fn update_after_run(&mut self) {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
-        self.last_run = Some(now);
-        self.run_count += 1;
-        self.next_run = Self::calculate_next_run(&self.schedule, now);
+    #[test]
+    fn test_mcp_config_default() {
+        let mcp = McpConfig::default();
+        assert!(mcp.enabled);
+        assert_eq!(mcp.api_port, 38472);
+        assert!(mcp.api_key.is_none());
+    }
+
+    #[test]
+    fn test_mcp_config_toml_roundtrip_with_key() {
+        let toml = r#"
+enabled = false
+api_port = 9999
+api_key = "sk-secret"
+"#;
+        let mcp: McpConfig = toml::from_str(toml).unwrap();
+        assert!(!mcp.enabled);
+        assert_eq!(mcp.api_port, 9999);
+        assert_eq!(mcp.api_key.as_deref(), Some("sk-secret"));
+        let back = toml::to_string(&mcp).unwrap();
+        assert!(back.contains("9999"));
+        assert!(back.contains("sk-secret"));
+    }
+
+    #[test]
+    fn test_mcp_config_toml_roundtrip_without_key() {
+        let toml = r#"
+enabled = true
+api_port = 38472
+"#;
+        let mcp: McpConfig = toml::from_str(toml).unwrap();
+        assert!(mcp.enabled);
+        assert_eq!(mcp.api_port, 38472);
+        assert!(mcp.api_key.is_none());
     }
 }

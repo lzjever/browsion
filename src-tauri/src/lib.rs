@@ -34,6 +34,9 @@ pub fn run() {
             // Create application state (Arc so API server can share it)
             let state = std::sync::Arc::new(AppState::new(config.clone()));
 
+            // Inject app handle so HTTP API handlers can emit events to frontend
+            *state.app_handle.lock() = Some(app.handle().clone());
+
             // Start local HTTP API if MCP config says enabled
             let mcp = &config.mcp;
             if mcp.enabled && mcp.api_port > 0 {
@@ -69,6 +72,7 @@ pub fn run() {
                                 for profile_id in &removed {
                                     state.session_manager.disconnect(profile_id).await;
                                 }
+                                state.emit("browser-status-changed");
                             }
                             Ok(_) => {}
                             Err(e) => tracing::warn!("Dead process cleanup failed: {}", e),

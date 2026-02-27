@@ -2,6 +2,117 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.0] - 2026-02-27
+
+### Added
+
+#### CDP Flatten Mode (Architecture)
+- Single browser-level WebSocket connection via `/json/version` (CDP flatten mode)
+- Multi-session support: each tab runs in its own CDP session, all multiplexed over one WS
+- Per-tab state: AX ref cache, inflight request counter, session ID, URL — saved and restored on `switch_tab`
+- Event routing keyed by `(session_id, method)` to avoid cross-tab interference
+
+#### New MCP Tools (73 total, up from 61)
+- `wait_for_new_tab` — subscribe to `Target.targetCreated` before clicking `target="_blank"` links
+- `get_page_text` — extract full `document.body.innerText`
+- `block_url` — block network requests matching a glob pattern (`*` wildcard support)
+- `mock_url` — intercept and mock responses for matched URLs
+- `clear_intercepts` — disable all Fetch domain intercept rules
+- `print_to_pdf` — render page to PDF with layout options (landscape, headers, margins)
+- `tap` — mobile touch tap via `Input.dispatchTouchEvent`
+- `swipe` — mobile swipe gesture with direction and distance
+- `get_frames` — list all iframes on the page
+- `switch_frame` — execute CDP commands inside a specific iframe
+- `main_frame` — return focus to the main frame
+- `clear_console` — clear the captured console log buffer
+
+#### New HTTP API Routes
+- `POST /api/browser/:id/tabs/wait_new` — wait for new tab
+- `GET /api/browser/:id/page_text` — get page text
+- `POST /api/browser/:id/intercept/block` — block URLs
+- `POST /api/browser/:id/intercept/mock` — mock URLs
+- `DELETE /api/browser/:id/intercept` — clear intercept rules
+- `GET /api/browser/:id/pdf` — print to PDF
+- `POST /api/browser/:id/tap` — mobile tap
+- `POST /api/browser/:id/swipe` — mobile swipe
+- `GET /api/browser/:id/frames` — list frames
+- `POST /api/browser/:id/switch_frame` — switch to frame
+- `POST /api/browser/:id/main_frame` — switch to main frame
+- `POST /api/browser/:id/console/clear` — clear console buffer
+
+#### New Data Types
+- `TabInfo.active` — whether a tab is currently focused
+- `FrameInfo` — frame ID, URL, parent frame ID
+- `ConsoleLogEntry` — level, text, source, timestamp
+- `InterceptRule` — url_pattern + action (Block or Mock)
+
+#### UI Improvements
+- Toast notifications and `ConfirmDialog` — replaced all `alert()`/`confirm()` in ProfileList
+- Profile cards show timezone and user data directory
+- Search bar filters by profile name and tags simultaneously
+- Loading state on Launch button during browser startup
+- Auto-cleanup of dead browser processes every 30s
+
+#### Chrome for Testing (CfT)
+- Auto-download Chrome for Testing (Stable/Beta/Dev/Canary channels)
+- Platform-aware binary paths (linux64, mac-x64, mac-arm64, win64)
+- Progress events streamed to UI during download
+
+#### Test Suite
+- 20 E2E browser tests (`src-tauri/tests/e2e_browser_test.rs`) using real Chrome
+- Integration tests for API and config (`api_integration_test.rs`, `config_and_cft_test.rs`)
+- 27 unit tests (`cargo test --lib`): glob_match, config validation, process, MCP commands
+
+### Fixed
+
+#### Critical Bugs
+- **WS reader deadlock**: `tokio::Mutex` self-deadlock in `Network.requestWillBeSent` handler — double-lock in one statement caused all commands to hang. Fixed to single lock acquisition.
+- **DOM.pushNodesByBackendIdsToFrontend deprecated** (Chrome 143): replaced with `DOM.resolveNode(backendNodeId)` + `Runtime.callFunctionOn` for AX-ref coordinate resolution
+- **slow_type double keypress**: `keyDown` with `text` field caused Chrome to synthesize `keypress` event, doubling typed characters. Removed `text` from `keyDown`/`keyUp` events; only `char` event carries `text`.
+- **Tray icon panic**: `app.default_window_icon().unwrap()` replaced with conditional `if let Some(icon)` to avoid panic when no icon is configured
+- **Mutex poison panic** in `update_mcp_config`: `.unwrap()` on locked mutex replaced with `.unwrap_or_else(|e| e.into_inner())`
+- **CORS header parse panic**: `"X-API-Key".parse().unwrap()` replaced with `HeaderName::from_static("x-api-key")`
+
+#### CDP Fixes
+- `new_tab`: changed from GET to PUT for `/json/new` endpoint (Chrome requires PUT)
+- `networkidle`: real implementation using `inflight_requests` counter that resets on navigation; polls for 500ms of zero inflight with a single shared deadline
+- `upload_file`: shadow DOM traversal via JS `deepQuery` + `DOM.describeNode` + `backendNodeId` (not `DOM.querySelector`)
+- `wait_for_text`: use `evaluate_js` with JS try-catch to ignore page-transition errors
+- `scroll_element`: fixed mouseWheel events via `Input.dispatchMouseEvent type=mouseWheel`
+- Selector encoding: all CSS selectors serialized via `serde_json::to_string()` to prevent injection
+
+#### Process / Config Fixes
+- `ProcessManager` now initializes `recent_launches` from persisted config on startup
+- Tag filter state preserved across profile refreshes
+- User extensions no longer blocked (`--disable-extensions` removed from defaults)
+- CDP port counter correctly wraps from 19221 back to 9222
+- `Asia/Kolkata` timezone corrected (was `India/Kolkata`, which is invalid IANA)
+- Duplicate and deprecated Chrome args removed from presets; headless and window-size presets added
+- API key generation uses `crypto.getRandomValues()` (cryptographically secure)
+- Silent `save_config` failure now logs `tracing::warn` instead of being silently ignored
+
+#### Network Interception
+- `block_url` / `mock_url` patterns now support `*` glob wildcards (e.g. `"*/api/v1/*"`)
+
+### Changed
+
+#### Architecture
+- **CDP client**: Migrated from per-tab WebSocket connections to single browser-level WS (flatten mode) for reliable multi-tab support
+- **Tab management**: `switch_tab` saves/restores per-tab AX ref cache and inflight counter
+
+#### Documentation
+- README completely rewritten: 73 tools, full HTTP API table (70+ endpoints), correct project structure
+- `docs/mcp-server-design.md` rewritten from planning doc to accurate technical reference
+
+### Removed
+
+- Legacy AI agent engine (`src-tauri/src/agent/engine.rs`, `action.rs`, `llm.rs`) — replaced by MCP/HTTP API automation
+- Legacy agent UI components (`AgentPanel.tsx`, `AISettings.tsx`, `SchedulePanel.tsx`)
+- Legacy agent TypeScript types (`src/types/agent.ts`)
+- Legacy agent integration tests (superseded by E2E browser tests)
+
+---
+
 ## [0.2.3] - 2026-02-19
 
 ### Added

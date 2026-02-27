@@ -1,48 +1,87 @@
-use crate::agent::llm::test_provider;
-use crate::agent::types::{AgentOptions, AgentProgress};
-use crate::config::{validation, AIConfig, BrowserProfile, ProviderConfig};
+use crate::config::schema::BrowserSource;
+use crate::config::{validation, BrowserProfile};
+use crate::cft::{ensure_chrome_binary, fetch_versions, get_platform, CftProgress};
 use crate::state::AppState;
 use crate::window;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
+use tauri::Emitter;
 use tauri::State;
 
 /// Get all profiles
 #[tauri::command]
-pub async fn get_profiles(state: State<'_, AppState>) -> Result<Vec<BrowserProfile>, String> {
+pub async fn get_profiles(state: State<'_, Arc<AppState>>) -> Result<Vec<BrowserProfile>, String> {
     let config = state.config.read();
     Ok(config.profiles.clone())
 }
 
-/// Get the current Chrome path
-#[tauri::command]
-pub async fn get_chrome_path(state: State<'_, AppState>) -> Result<String, String> {
-    let config = state.config.read();
-    Ok(config.chrome_path.display().to_string())
+/// Resolve effective Chrome path from config (CfT or custom). Used by commands and HTTP API.
+pub async fn get_effective_chrome_path_from_config(
+    config: &crate::config::AppConfig,
+) -> Result<PathBuf, String> {
+    match &config.browser_source {
+        BrowserSource::Custom { path, .. } => {
+            validation::validate_chrome_path(path).map_err(|e| e.to_string())?;
+            Ok(path.clone())
+        }
+        BrowserSource::ChromeForTesting {
+            channel,
+            version,
+            download_dir,
+        } => {
+            let platform = get_platform();
+            let versions = fetch_versions(platform).await?;
+            let channel_str = channel.as_str();
+            let version_info = versions
+                .iter()
+                .find(|v| v.channel == channel_str)
+                .ok_or_else(|| format!("Channel {} not found", channel_str))?;
+            let version_info = if let Some(v) = version {
+                versions
+                    .iter()
+                    .find(|i| i.version == *v)
+                    .unwrap_or(version_info)
+                    .clone()
+            } else {
+                version_info.clone()
+            };
+            ensure_chrome_binary(&version_info, download_dir, None).await
+        }
+    }
 }
 
-/// Launch a profile
-#[tauri::command]
-pub async fn launch_profile(profile_id: String, state: State<'_, AppState>) -> Result<u32, String> {
+/// Resolve effective Chrome path from app state.
+async fn get_effective_chrome_path(state: &State<'_, Arc<AppState>>) -> Result<PathBuf, String> {
     let config = state.config.read().clone();
-    let pid = state
+    get_effective_chrome_path_from_config(&config).await
+}
+
+/// Get the current effective Chrome path (CfT binary or custom path).
+#[tauri::command]
+pub async fn get_chrome_path(state: State<'_, Arc<AppState>>) -> Result<String, String> {
+    let path = get_effective_chrome_path(&state).await?;
+    Ok(path.display().to_string())
+}
+
+/// Launch a profile. Returns PID (cdp_port is stored internally).
+#[tauri::command]
+pub async fn launch_profile(profile_id: String, state: State<'_, Arc<AppState>>) -> Result<u32, String> {
+    let chrome_path = get_effective_chrome_path(&state).await?;
+    let config = state.config.read().clone();
+    let (pid, _cdp_port) = state
         .process_manager
-        .launch_profile(&profile_id, &config)
+        .launch_profile(&profile_id, &config, &chrome_path)
         .await
         .map_err(|e| e.to_string())?;
 
-    // Update recent profiles in config
     {
         let mut config = state.config.write();
-        // Remove if already exists
         config.recent_profiles.retain(|id| id != &profile_id);
-        // Add to front
         config.recent_profiles.insert(0, profile_id.clone());
-        // Keep only last 10
         if config.recent_profiles.len() > 10 {
             config.recent_profiles.truncate(10);
         }
-        // Save to disk
         if let Err(e) = crate::config::save_config(&config) {
             tracing::warn!("Failed to save recent profiles: {}", e);
         }
@@ -55,7 +94,7 @@ pub async fn launch_profile(profile_id: String, state: State<'_, AppState>) -> R
 #[tauri::command]
 pub async fn activate_profile(
     profile_id: String,
-    state: State<'_, AppState>,
+    state: State<'_, Arc<AppState>>,
 ) -> Result<(), String> {
     if let Some(info) = state.process_manager.get_process_info(&profile_id) {
         window::activate_window(info.pid).map_err(|e| e.to_string())?;
@@ -67,7 +106,7 @@ pub async fn activate_profile(
 
 /// Kill a running profile
 #[tauri::command]
-pub async fn kill_profile(profile_id: String, state: State<'_, AppState>) -> Result<(), String> {
+pub async fn kill_profile(profile_id: String, state: State<'_, Arc<AppState>>) -> Result<(), String> {
     state
         .process_manager
         .kill_profile(&profile_id)
@@ -78,7 +117,7 @@ pub async fn kill_profile(profile_id: String, state: State<'_, AppState>) -> Res
 /// Get running status for all profiles
 #[tauri::command]
 pub async fn get_running_profiles(
-    state: State<'_, AppState>,
+    state: State<'_, Arc<AppState>>,
 ) -> Result<HashMap<String, bool>, String> {
     let config = state.config.read();
     let mut status = HashMap::new();
@@ -97,7 +136,7 @@ pub async fn get_running_profiles(
 #[tauri::command]
 pub async fn add_profile(
     profile: BrowserProfile,
-    state: State<'_, AppState>,
+    state: State<'_, Arc<AppState>>,
 ) -> Result<(), String> {
     // Validate profile
     validation::validate_profile(&profile).map_err(|e| e.to_string())?;
@@ -115,7 +154,7 @@ pub async fn add_profile(
 #[tauri::command]
 pub async fn update_profile(
     profile: BrowserProfile,
-    state: State<'_, AppState>,
+    state: State<'_, Arc<AppState>>,
 ) -> Result<(), String> {
     // Validate profile
     validation::validate_profile(&profile).map_err(|e| e.to_string())?;
@@ -134,7 +173,7 @@ pub async fn update_profile(
 
 /// Delete a profile
 #[tauri::command]
-pub async fn delete_profile(profile_id: String, state: State<'_, AppState>) -> Result<(), String> {
+pub async fn delete_profile(profile_id: String, state: State<'_, Arc<AppState>>) -> Result<(), String> {
     // Check if profile is running
     if state.process_manager.is_running(&profile_id) {
         return Err(format!(
@@ -157,27 +196,97 @@ pub async fn delete_profile(profile_id: String, state: State<'_, AppState>) -> R
     Ok(())
 }
 
-/// Update Chrome executable path
+/// Set Chrome to use a custom executable path (e.g. ungoogled Chromium).
 #[tauri::command]
-pub async fn update_chrome_path(path: String, state: State<'_, AppState>) -> Result<(), String> {
+pub async fn update_chrome_path(path: String, state: State<'_, Arc<AppState>>) -> Result<(), String> {
     let path_buf = PathBuf::from(&path);
-
-    // Validate the Chrome path
     validation::validate_chrome_path(&path_buf).map_err(|e| e.to_string())?;
 
     let mut config = state.config.write();
-    config.chrome_path = path_buf;
+    config.browser_source = BrowserSource::Custom {
+        path: path_buf,
+        fingerprint_chromium: false,
+    };
 
-    // Save to disk
     crate::config::save_config(&config).map_err(|e| e.to_string())?;
-
     Ok(())
+}
+
+/// Get browser source config (for UI: CfT channel/version or custom path).
+#[tauri::command]
+pub async fn get_browser_source(
+    state: State<'_, Arc<AppState>>,
+) -> Result<crate::config::schema::BrowserSource, String> {
+    let config = state.config.read();
+    Ok(config.browser_source.clone())
+}
+
+/// Update browser source (CfT channel/version/download_dir or custom path).
+#[tauri::command]
+pub async fn update_browser_source(
+    source: crate::config::schema::BrowserSource,
+    state: State<'_, Arc<AppState>>,
+) -> Result<(), String> {
+    let mut config = state.config.write();
+    config.browser_source = source;
+    crate::config::save_config(&config).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Get available CfT versions for current platform.
+#[tauri::command]
+pub async fn get_cft_versions() -> Result<Vec<crate::cft::CftVersionInfo>, String> {
+    let platform = get_platform();
+    fetch_versions(platform).await
+}
+
+/// Download a CfT version and return the path to the Chrome binary.
+/// Emits "cft-download-progress" events with CftProgress payload for UI progress bar.
+#[tauri::command]
+pub async fn download_cft_version(
+    window: tauri::Window,
+    channel: String,
+    version: String,
+    download_dir: Option<String>,
+    state: State<'_, Arc<AppState>>,
+) -> Result<String, String> {
+    let platform = get_platform();
+    let versions = fetch_versions(platform).await?;
+    let version_info = versions
+        .iter()
+        .find(|v| v.channel == channel && v.version == version)
+        .ok_or_else(|| format!("Version {} for channel {} not found", version, channel))?;
+
+    let dir = match download_dir {
+        Some(d) => PathBuf::from(d),
+        None => {
+            let config = state.config.read();
+            match &config.browser_source {
+                BrowserSource::ChromeForTesting { download_dir, .. } => download_dir.clone(),
+                _ => default_cft_download_dir(),
+            }
+        }
+    };
+
+    let on_progress = Arc::new(move |p: CftProgress| {
+        let _ = window.emit("cft-download-progress", &p);
+    });
+
+    let path = ensure_chrome_binary(version_info, &dir, Some(on_progress)).await?;
+    Ok(path.display().to_string())
+}
+
+fn default_cft_download_dir() -> PathBuf {
+    dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".browsion")
+        .join("cft")
 }
 
 /// Get application settings
 #[tauri::command]
 pub async fn get_settings(
-    state: State<'_, AppState>,
+    state: State<'_, Arc<AppState>>,
 ) -> Result<crate::config::AppSettings, String> {
     let config = state.config.read();
     Ok(config.settings.clone())
@@ -187,7 +296,7 @@ pub async fn get_settings(
 #[tauri::command]
 pub async fn update_settings(
     settings: crate::config::AppSettings,
-    state: State<'_, AppState>,
+    state: State<'_, Arc<AppState>>,
 ) -> Result<(), String> {
     let mut config = state.config.write();
     config.settings = settings;
@@ -198,10 +307,62 @@ pub async fn update_settings(
     Ok(())
 }
 
+/// Get MCP / API server configuration
+#[tauri::command]
+pub async fn get_mcp_config(
+    state: State<'_, Arc<AppState>>,
+) -> Result<crate::config::schema::McpConfig, String> {
+    let config = state.config.read();
+    Ok(config.mcp.clone())
+}
+
+/// Update MCP / API server configuration.
+/// Saves to disk, then stops and optionally restarts the HTTP API server.
+#[tauri::command]
+pub async fn update_mcp_config(
+    mcp: crate::config::schema::McpConfig,
+    state: State<'_, Arc<AppState>>,
+) -> Result<(), String> {
+    {
+        let mut config = state.config.write();
+        config.mcp = mcp.clone();
+        crate::config::save_config(&config).map_err(|e| e.to_string())?;
+    }
+
+    // Stop the existing server
+    {
+        let mut guard = state.api_server_abort.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(abort_fn) = guard.take() {
+            abort_fn();
+            tracing::info!("Stopped API server for reconfiguration");
+        }
+    }
+
+    // Brief pause to let the old listener release the port
+    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+
+    // Restart if enabled
+    if mcp.enabled && mcp.api_port > 0 {
+        let state_clone: Arc<AppState> = Arc::clone(&state);
+        let api_key = mcp.api_key.clone();
+        let port = mcp.api_port;
+        let handle = tokio::spawn(async move {
+            if let Err(e) = crate::api::run_server(state_clone, port, api_key).await {
+                tracing::error!("API server error after restart: {}", e);
+            }
+        });
+        let mut guard = state.api_server_abort.lock().unwrap_or_else(|e| e.into_inner());
+        *guard = Some(Box::new(move || handle.abort()));
+        tracing::info!("Restarted API server on port {}", mcp.api_port);
+    }
+
+    Ok(())
+}
+
 /// Get recently launched profiles
 #[tauri::command]
 pub async fn get_recent_profiles(
-    state: State<'_, AppState>,
+    state: State<'_, Arc<AppState>>,
 ) -> Result<Vec<BrowserProfile>, String> {
     let recent_ids = state.process_manager.get_recent_launches();
     let config = state.config.read();
@@ -216,267 +377,3 @@ pub async fn get_recent_profiles(
     Ok(recent_profiles)
 }
 
-// ============================================
-// AI Agent Commands
-// ============================================
-
-/// Run an AI agent task
-#[tauri::command]
-pub async fn run_agent(
-    profile_id: String,
-    task: String,
-    options: Option<AgentOptions>,
-    state: State<'_, AppState>,
-) -> Result<String, String> {
-    let config = state.config.read().clone();
-
-    // Find the profile
-    let profile = config
-        .profiles
-        .iter()
-        .find(|p| p.id == profile_id)
-        .ok_or_else(|| format!("Profile {} not found", profile_id))?
-        .clone();
-
-    // Check if AI is configured
-    if config.ai.providers.is_empty() {
-        return Err("No AI providers configured. Please configure at least one provider in Settings > AI Configuration.".to_string());
-    }
-
-    // Check if default LLM is set and the provider has an API key (for non-local providers)
-    if let Some(ref default_llm) = config.ai.default_llm {
-        // Format is "provider_id:model_name"
-        let provider_id = default_llm.split(':').next().unwrap_or(default_llm);
-        if let Some(provider) = config.ai.providers.get(provider_id) {
-            if provider.api_type != crate::config::ApiType::Ollama && provider.api_key.is_none() {
-                return Err(format!(
-                    "API key not configured for provider '{}'. Please add your API key in Settings > AI Configuration.",
-                    provider.name
-                ));
-            }
-        } else {
-            return Err(format!(
-                "Default provider '{}' not found. Please configure it in Settings > AI Configuration.",
-                provider_id
-            ));
-        }
-    } else {
-        return Err("No default LLM configured. Please select a default LLM in Settings > AI Configuration.".to_string());
-    }
-
-    let agent_options = options.unwrap_or_default();
-    let ai_config = crate::agent::types::AIConfig::from(config.ai.clone());
-
-    state
-        .agent_engine
-        .run(
-            &profile,
-            &config.chrome_path,
-            task,
-            agent_options,
-            ai_config,
-        )
-        .await
-        .map_err(|e| e.to_string())
-}
-
-/// Stop a running agent
-#[tauri::command]
-pub async fn stop_agent(agent_id: String, state: State<'_, AppState>) -> Result<(), String> {
-    state
-        .agent_engine
-        .stop(&agent_id)
-        .await
-        .map_err(|e| e.to_string())
-}
-
-/// Pause a running agent
-#[tauri::command]
-pub async fn pause_agent(agent_id: String, state: State<'_, AppState>) -> Result<(), String> {
-    state
-        .agent_engine
-        .pause(&agent_id)
-        .await
-        .map_err(|e| e.to_string())
-}
-
-/// Resume a paused agent
-#[tauri::command]
-pub async fn resume_agent(agent_id: String, state: State<'_, AppState>) -> Result<(), String> {
-    state
-        .agent_engine
-        .resume(&agent_id)
-        .await
-        .map_err(|e| e.to_string())
-}
-
-/// Get agent status
-#[tauri::command]
-pub async fn get_agent_status(
-    agent_id: String,
-    state: State<'_, AppState>,
-) -> Result<Option<AgentProgress>, String> {
-    Ok(state.agent_engine.get_status(&agent_id).await)
-}
-
-// ============================================
-// AI Configuration Commands
-// ============================================
-
-/// Get AI configuration
-#[tauri::command]
-pub async fn get_ai_config(state: State<'_, AppState>) -> Result<AIConfig, String> {
-    let config = state.config.read();
-    Ok(config.ai.clone())
-}
-
-/// Update AI configuration
-#[tauri::command]
-pub async fn update_ai_config(
-    ai_config: AIConfig,
-    state: State<'_, AppState>,
-) -> Result<(), String> {
-    let mut config = state.config.write();
-    config.ai = ai_config;
-
-    // Save to disk
-    crate::config::save_config(&config).map_err(|e| e.to_string())?;
-
-    Ok(())
-}
-
-/// Test AI provider connection
-#[tauri::command]
-pub async fn test_ai_provider(
-    provider_config: ProviderConfig,
-    model: String,
-) -> Result<String, String> {
-    // Convert to agent types
-    let agent_config = crate::agent::types::ProviderConfig::from(provider_config);
-    test_provider(&agent_config, &model).await
-}
-
-// ============================================
-// Task Template Commands (File-based)
-// ============================================
-
-/// Get all task templates from files
-#[tauri::command]
-pub async fn get_templates() -> Result<Vec<crate::templates::TemplateInfo>, String> {
-    crate::templates::list_templates()
-}
-
-/// Get a single template by ID
-#[tauri::command]
-pub async fn get_template(id: String) -> Result<crate::templates::TemplateInfo, String> {
-    crate::templates::get_template(&id)
-}
-
-/// Create or update a template
-#[tauri::command]
-pub async fn save_template(
-    id: String,
-    name: String,
-    content: String,
-    start_url: Option<String>,
-    headless: bool,
-) -> Result<(), String> {
-    crate::templates::save_template(&id, &name, &content, start_url.as_deref(), headless)
-}
-
-/// Delete a template
-#[tauri::command]
-pub async fn delete_template(id: String) -> Result<(), String> {
-    crate::templates::delete_template(&id)
-}
-
-/// Open the templates directory in file manager
-#[tauri::command]
-pub async fn open_templates_dir() -> Result<(), String> {
-    crate::templates::open_templates_dir()
-}
-
-// ============================================
-// Scheduled Task Commands
-// ============================================
-
-/// Get all scheduled tasks
-#[tauri::command]
-pub async fn get_scheduled_tasks(
-    state: State<'_, AppState>,
-) -> Result<Vec<crate::config::ScheduledTask>, String> {
-    let config = state.config.read();
-    Ok(config.scheduled_tasks.clone())
-}
-
-/// Add a new scheduled task
-#[tauri::command]
-pub async fn add_scheduled_task(
-    task: crate::config::ScheduledTask,
-    state: State<'_, AppState>,
-) -> Result<(), String> {
-    let mut config = state.config.write();
-    config.scheduled_tasks.push(task);
-
-    // Save to disk
-    crate::config::save_config(&config).map_err(|e| e.to_string())?;
-
-    Ok(())
-}
-
-/// Update an existing scheduled task
-#[tauri::command]
-pub async fn update_scheduled_task(
-    task: crate::config::ScheduledTask,
-    state: State<'_, AppState>,
-) -> Result<(), String> {
-    let mut config = state.config.write();
-
-    if let Some(t) = config.scheduled_tasks.iter_mut().find(|t| t.id == task.id) {
-        *t = task;
-        // Save to disk
-        crate::config::save_config(&config).map_err(|e| e.to_string())?;
-        Ok(())
-    } else {
-        Err(format!("Scheduled task {} not found", task.id))
-    }
-}
-
-/// Delete a scheduled task
-#[tauri::command]
-pub async fn delete_scheduled_task(
-    task_id: String,
-    state: State<'_, AppState>,
-) -> Result<(), String> {
-    let mut config = state.config.write();
-    let before_len = config.scheduled_tasks.len();
-    config.scheduled_tasks.retain(|t| t.id != task_id);
-
-    if config.scheduled_tasks.len() == before_len {
-        return Err(format!("Scheduled task {} not found", task_id));
-    }
-
-    // Save to disk
-    crate::config::save_config(&config).map_err(|e| e.to_string())?;
-
-    Ok(())
-}
-
-/// Toggle scheduled task enabled state
-#[tauri::command]
-pub async fn toggle_scheduled_task(
-    task_id: String,
-    enabled: bool,
-    state: State<'_, AppState>,
-) -> Result<(), String> {
-    let mut config = state.config.write();
-
-    if let Some(task) = config.scheduled_tasks.iter_mut().find(|t| t.id == task_id) {
-        task.enabled = enabled;
-        // Save to disk
-        crate::config::save_config(&config).map_err(|e| e.to_string())?;
-        Ok(())
-    } else {
-        Err(format!("Scheduled task {} not found", task_id))
-    }
-}

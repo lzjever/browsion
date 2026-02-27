@@ -9,6 +9,41 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio_tungstenite::{connect_async, tungstenite::Message as WsMessage};
 
+/// Simple glob/wildcard matching: `*` matches any sequence of characters.
+/// e.g. `"*/form*"` matches `"http://example.com/form?x=1"`
+fn glob_match(pattern: &str, text: &str) -> bool {
+    let parts: Vec<&str> = pattern.split('*').collect();
+    if parts.len() == 1 {
+        // No wildcard — literal substring match
+        return text.contains(pattern);
+    }
+    let mut pos = 0usize;
+    for (i, part) in parts.iter().enumerate() {
+        if part.is_empty() {
+            continue;
+        }
+        match text[pos..].find(part) {
+            None => return false,
+            Some(idx) => {
+                // The first segment must match at the start of the remaining text
+                // only if the pattern does NOT start with '*'
+                if i == 0 && !pattern.starts_with('*') && idx != 0 {
+                    return false;
+                }
+                pos += idx + part.len();
+            }
+        }
+    }
+    // If the pattern does NOT end with '*', the last segment must reach the end
+    if !pattern.ends_with('*') {
+        let last = parts.last().unwrap();
+        if !last.is_empty() && !text.ends_with(last) {
+            return false;
+        }
+    }
+    true
+}
+
 /// Per-tab state saved/restored on tab switch.
 #[derive(Default, Clone)]
 struct TabState {
@@ -250,6 +285,7 @@ impl CDPClient {
             self.send_command("Runtime.enable", json!({})).await?;
             self.send_command("Network.enable", json!({})).await?;
             self.send_command("Log.enable", json!({})).await?;
+            self.send_command("DOM.enable", json!({})).await?;
 
             tracing::info!(
                 "CDP flatten mode connected for profile {} (target: {})",
@@ -383,8 +419,8 @@ impl CDPClient {
                                             "sessionId": session_id
                                         }));
                                         drop(log);
-                                        *inflight_clone.lock().await =
-                                            inflight_clone.lock().await.saturating_add(1);
+                                        let mut count = inflight_clone.lock().await;
+                                        *count = count.saturating_add(1);
                                     }
                                     "Network.responseReceived" => {
                                         let url = params["response"]["url"]
@@ -506,7 +542,7 @@ impl CDPClient {
                                             .as_str().unwrap_or("").to_string();
                                         let rules = intercept_rules.lock().await;
                                         let matching = rules.iter()
-                                            .find(|r| url.contains(&r.url_pattern))
+                                            .find(|r| glob_match(&r.url_pattern, &url))
                                             .cloned();
                                         drop(rules);
 
@@ -1022,47 +1058,6 @@ impl CDPClient {
         Ok((x, y))
     }
 
-    /// Get the viewport-relative center of a DOM node by its **frontend** node ID.
-    /// Uses Runtime.callFunctionOn → getBoundingClientRect (viewport-relative, not document-absolute).
-    async fn get_node_center(&self, node_id: i64) -> Result<(f64, f64), String> {
-        // Resolve frontend node_id → Runtime RemoteObject
-        let resolve_result = self
-            .send_command("DOM.resolveNode", json!({"nodeId": node_id}))
-            .await?;
-        let object_id = resolve_result
-            .get("result")
-            .and_then(|r| r.get("object"))
-            .and_then(|o| o.get("objectId"))
-            .and_then(|v| v.as_str())
-            .ok_or("Failed to resolve node to runtime object")?
-            .to_string();
-
-        let call_result = self
-            .send_command(
-                "Runtime.callFunctionOn",
-                json!({
-                    "objectId": object_id,
-                    "functionDeclaration": "function() { const rect = this.getBoundingClientRect(); if (rect.width === 0 && rect.height === 0) return null; return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 }; }",
-                    "returnByValue": true
-                }),
-            )
-            .await?;
-
-        let value = call_result
-            .get("result")
-            .and_then(|r| r.get("result"))
-            .and_then(|r| r.get("value"))
-            .ok_or("Failed to get node center")?;
-
-        if value.is_null() {
-            return Err("Element has no layout dimensions (hidden or detached)".to_string());
-        }
-
-        let x = value.get("x").and_then(|v| v.as_f64()).ok_or("Failed to get node center x")?;
-        let y = value.get("y").and_then(|v| v.as_f64()).ok_or("Failed to get node center y")?;
-        Ok((x, y))
-    }
-
     /// Dispatch a real left-click at coordinates via CDP Input domain.
     async fn dispatch_mouse_click(&self, x: f64, y: f64) -> Result<(), String> {
         self.send_command(
@@ -1242,7 +1237,7 @@ impl CDPClient {
             let ch_str = ch.to_string();
             self.send_command(
                 "Input.dispatchKeyEvent",
-                json!({"type": "keyDown", "key": ch_str, "text": ch_str}),
+                json!({"type": "keyDown", "key": ch_str}),
             )
             .await?;
             self.send_command(
@@ -1252,7 +1247,7 @@ impl CDPClient {
             .await?;
             self.send_command(
                 "Input.dispatchKeyEvent",
-                json!({"type": "keyUp", "key": ch_str, "text": ch_str}),
+                json!({"type": "keyUp", "key": ch_str}),
             )
             .await?;
 
@@ -2411,9 +2406,9 @@ impl CDPClient {
 
     // ── Ref-based interactions (use after get_ax_tree) ───────────────
 
-    /// Resolve an AX ref to a frontend node ID via DOM.pushNodesByBackendIdsToFrontend.
-    /// Returns better error messages for debugging.
-    async fn resolve_ref_to_node_id(&self, ref_id: &str) -> Result<i64, String> {
+    /// Resolve an AX ref to a Runtime RemoteObject objectId via DOM.resolveNode(backendNodeId).
+    /// This bypasses the deprecated DOM.pushNodesByBackendIdsToFrontend.
+    async fn resolve_ref_to_object_id(&self, ref_id: &str) -> Result<String, String> {
         let backend_node_id = {
             let cache = self.ax_ref_cache.lock().await;
             cache
@@ -2422,62 +2417,64 @@ impl CDPClient {
                 .ok_or_else(|| format!("Unknown ref '{}'. Call get_ax_tree first.", ref_id))?
         };
 
-        let push_result = self
+        let resolve_result = self
             .send_command(
-                "DOM.pushNodesByBackendIdsToFrontend",
-                json!({"backendNodeIds": [backend_node_id]}),
+                "DOM.resolveNode",
+                json!({"backendNodeId": backend_node_id}),
             )
             .await?;
 
-        // Check for error in response
-        if let Some(error) = push_result.get("error") {
+        if let Some(error) = resolve_result.get("error") {
             return Err(format!(
                 "CDP error resolving ref '{}': {}",
                 ref_id,
-                error.as_str().unwrap_or("unknown error")
+                serde_json::to_string(error).unwrap_or_else(|_| "unknown error".to_string())
             ));
         }
 
-        let node_ids = push_result
+        let object_id = resolve_result
             .get("result")
-            .and_then(|r| r.get("nodeIds"))
-            .and_then(|v| v.as_array())
-            .ok_or_else(|| {
-                format!(
-                    "Failed to resolve backend node for ref '{}': no nodeIds in response. \
-                     This may happen on data: URLs or special pages. Response: {}",
-                    ref_id,
-                    serde_json::to_string(&push_result).unwrap_or_default()
-                )
-            })?;
+            .and_then(|r| r.get("object"))
+            .and_then(|o| o.get("objectId"))
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| format!("No objectId for ref '{}' in DOM.resolveNode response", ref_id))?
+            .to_string();
 
-        if node_ids.is_empty() {
-            return Err(format!(
-                "Node for ref '{}' no longer exists or is not accessible (empty nodeIds). \
-                 This may happen on data: URLs or special pages.",
-                ref_id
-            ));
+        Ok(object_id)
+    }
+
+    /// Get the viewport center of a node via its Runtime objectId.
+    async fn get_node_center_from_object(&self, object_id: &str) -> Result<(f64, f64), String> {
+        let call_result = self
+            .send_command(
+                "Runtime.callFunctionOn",
+                json!({
+                    "objectId": object_id,
+                    "functionDeclaration": "function() { const rect = this.getBoundingClientRect(); if (rect.width === 0 && rect.height === 0) return null; return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 }; }",
+                    "returnByValue": true
+                }),
+            )
+            .await?;
+
+        let value = call_result
+            .get("result")
+            .and_then(|r| r.get("result"))
+            .and_then(|r| r.get("value"))
+            .ok_or("Failed to get node center from object")?;
+
+        if value.is_null() {
+            return Err("Element has no layout dimensions (hidden or detached)".to_string());
         }
 
-        let node_id = node_ids
-            .first()
-            .and_then(|v| v.as_i64())
-            .ok_or_else(|| format!("Failed to get frontend node ID for ref '{}'", ref_id))?;
-
-        if node_id == 0 {
-            return Err(format!(
-                "Node for ref '{}' no longer exists (page may have changed).",
-                ref_id
-            ));
-        }
-
-        Ok(node_id)
+        let x = value.get("x").and_then(|v| v.as_f64()).ok_or("Failed to get node center x")?;
+        let y = value.get("y").and_then(|v| v.as_f64()).ok_or("Failed to get node center y")?;
+        Ok((x, y))
     }
 
     /// Click an element by its AX tree ref (e.g. "e1"). Call `get_ax_tree` first.
     pub async fn click_ref(&self, ref_id: &str) -> Result<(), String> {
-        let node_id = self.resolve_ref_to_node_id(ref_id).await?;
-        let (cx, cy) = self.get_node_center(node_id).await?;
+        let object_id = self.resolve_ref_to_object_id(ref_id).await?;
+        let (cx, cy) = self.get_node_center_from_object(&object_id).await?;
         self.dispatch_mouse_click(cx, cy).await?;
         tracing::debug!("click_ref {}", ref_id);
         Ok(())
@@ -2485,10 +2482,16 @@ impl CDPClient {
 
     /// Type text into an element by its AX tree ref. Call `get_ax_tree` first.
     pub async fn type_ref(&self, ref_id: &str, text: &str) -> Result<(), String> {
-        let node_id = self.resolve_ref_to_node_id(ref_id).await?;
+        let backend_node_id = {
+            let cache = self.ax_ref_cache.lock().await;
+            cache
+                .get(ref_id)
+                .copied()
+                .ok_or_else(|| format!("Unknown ref '{}'. Call get_ax_tree first.", ref_id))?
+        };
 
-        // Focus via CDP DOM.focus
-        self.send_command("DOM.focus", json!({"nodeId": node_id}))
+        // Focus via CDP DOM.focus (accepts backendNodeId directly)
+        self.send_command("DOM.focus", json!({"backendNodeId": backend_node_id}))
             .await?;
 
         let text_json = serde_json::to_string(text).unwrap_or_default();
@@ -2531,8 +2534,14 @@ impl CDPClient {
 
     /// Focus an element by its AX tree ref. Call `get_ax_tree` first.
     pub async fn focus_ref(&self, ref_id: &str) -> Result<(), String> {
-        let node_id = self.resolve_ref_to_node_id(ref_id).await?;
-        self.send_command("DOM.focus", json!({"nodeId": node_id}))
+        let backend_node_id = {
+            let cache = self.ax_ref_cache.lock().await;
+            cache
+                .get(ref_id)
+                .copied()
+                .ok_or_else(|| format!("Unknown ref '{}'. Call get_ax_tree first.", ref_id))?
+        };
+        self.send_command("DOM.focus", json!({"backendNodeId": backend_node_id}))
             .await?;
         tracing::debug!("focus_ref {}", ref_id);
         Ok(())
@@ -3000,5 +3009,41 @@ impl Drop for CDPClient {
                     .spawn();
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::glob_match;
+
+    #[test]
+    fn test_glob_match_no_wildcard() {
+        assert!(glob_match("/form", "http://example.com/form?x=1"));
+        assert!(!glob_match("/form", "http://example.com/other"));
+    }
+
+    #[test]
+    fn test_glob_match_leading_star() {
+        assert!(glob_match("*/form*", "http://example.com/form?x=1"));
+        assert!(glob_match("*/api/v1/*", "http://example.com/api/v1/users"));
+        assert!(!glob_match("*/api/v1/*", "http://example.com/api/v2/users"));
+    }
+
+    #[test]
+    fn test_glob_match_trailing_star() {
+        assert!(glob_match("http://example.com/*", "http://example.com/page"));
+        assert!(!glob_match("http://example.com/*", "http://other.com/page"));
+    }
+
+    #[test]
+    fn test_glob_match_star_only() {
+        assert!(glob_match("*", "anything"));
+        assert!(glob_match("*", ""));
+    }
+
+    #[test]
+    fn test_glob_match_multiple_wildcards() {
+        assert!(glob_match("*/images/*.png", "http://cdn.com/images/photo.png"));
+        assert!(!glob_match("*/images/*.png", "http://cdn.com/images/photo.jpg"));
     }
 }

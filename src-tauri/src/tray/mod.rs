@@ -1,4 +1,5 @@
 use crate::state::AppState;
+use std::sync::Arc;
 use tauri::{
     menu::{Menu, MenuItem, PredefinedMenuItem, Submenu},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
@@ -10,8 +11,11 @@ pub fn setup_tray<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     let menu = build_tray_menu(app)?;
 
     // Build tray icon
-    let _tray = TrayIconBuilder::new()
-        .icon(app.default_window_icon().unwrap().clone())
+    let mut builder = TrayIconBuilder::new();
+    if let Some(icon) = app.default_window_icon() {
+        builder = builder.icon(icon.clone());
+    }
+    let _tray = builder
         .menu(&menu)
         .on_menu_event(move |app, event| {
             let event_id = event.id.as_ref();
@@ -58,7 +62,7 @@ fn build_tray_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
     // Get recent profiles from state
     let mut menu_items: Vec<Box<dyn tauri::menu::IsMenuItem<R>>> = vec![Box::new(show_item)];
 
-    if let Some(state) = app.try_state::<AppState>() {
+    if let Some(state) = app.try_state::<Arc<AppState>>() {
         let config = state.config.read();
         let recent_ids = &config.recent_profiles;
 
@@ -147,7 +151,7 @@ fn show_main_window<R: Runtime>(app: &AppHandle<R>) {
 
 /// Handle profile click from tray menu
 fn handle_profile_click<R: Runtime>(app: &AppHandle<R>, profile_id: &str) {
-    if let Some(state) = app.try_state::<AppState>() {
+    if let Some(state) = app.try_state::<Arc<AppState>>() {
         let is_running = state.process_manager.is_running(profile_id);
 
         if is_running {
@@ -168,7 +172,14 @@ fn handle_profile_click<R: Runtime>(app: &AppHandle<R>, profile_id: &str) {
             let profile_id = profile_id.to_string();
 
             tauri::async_runtime::spawn(async move {
-                if let Err(e) = process_manager.launch_profile(&profile_id, &config).await {
+                let chrome_path = match crate::commands::get_effective_chrome_path_from_config(&config).await {
+                    Ok(p) => p,
+                    Err(e) => {
+                        tracing::error!("Failed to resolve Chrome path for profile {}: {}", profile_id, e);
+                        return;
+                    }
+                };
+                if let Err(e) = process_manager.launch_profile(&profile_id, &config, &chrome_path).await {
                     tracing::error!("Failed to launch profile {}: {}", profile_id, e);
                 }
             });

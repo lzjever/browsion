@@ -114,6 +114,7 @@ mod tests {
             color: Some("#FF5733".to_string()),
             custom_args: vec![],
             tags: vec![],
+            headless: false,
         };
 
         assert!(validate_profile(&profile).is_ok());
@@ -133,6 +134,7 @@ mod tests {
             color: None,
             custom_args: vec![],
             tags: vec![],
+            headless: false,
         };
 
         assert!(validate_profile(&profile).is_err());
@@ -152,6 +154,7 @@ mod tests {
             color: None,
             custom_args: vec![],
             tags: vec![],
+            headless: false,
         };
 
         assert!(validate_profile(&profile).is_err());
@@ -171,6 +174,7 @@ mod tests {
             color: Some("red".to_string()),
             custom_args: vec![],
             tags: vec![],
+            headless: false,
         };
 
         assert!(validate_profile(&profile).is_err());

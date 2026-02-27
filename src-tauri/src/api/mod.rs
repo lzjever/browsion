@@ -210,6 +210,8 @@ async fn add_profile(
     config.profiles.push(profile.clone());
     crate::config::save_config(&config)
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    drop(config);
+    state.emit("profiles-changed");
     Ok((StatusCode::CREATED, Json(profile)))
 }
 
@@ -234,6 +236,8 @@ async fn update_profile(
     config.profiles[pos] = profile.clone();
     crate::config::save_config(&config)
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    drop(config);
+    state.emit("profiles-changed");
     Ok(Json(profile))
 }
 
@@ -255,6 +259,8 @@ async fn delete_profile(
     }
     crate::config::save_config(&config)
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    drop(config);
+    state.emit("profiles-changed");
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -299,8 +305,11 @@ async fn launch_profile(
         if config.recent_profiles.len() > 10 {
             config.recent_profiles.truncate(10);
         }
-        let _ = crate::config::save_config(&config);
+        if let Err(e) = crate::config::save_config(&config) {
+            tracing::warn!("Failed to save recent profiles after launch: {}", e);
+        }
     }
+    state.emit("browser-status-changed");
     Ok(Json(LaunchResponse { pid, cdp_port }))
 }
 
@@ -314,6 +323,7 @@ async fn kill_profile(
         .kill_profile(&profile_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    state.emit("browser-status-changed");
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -1511,7 +1521,10 @@ pub fn app(state: ApiState, api_key: Option<String>) -> Router {
                 axum::http::Method::PUT,
                 axum::http::Method::DELETE,
             ])
-            .allow_headers([axum::http::header::CONTENT_TYPE, "X-API-Key".parse().unwrap()]),
+            .allow_headers([
+                axum::http::header::CONTENT_TYPE,
+                axum::http::HeaderName::from_static("x-api-key"),
+            ]),
     );
     app
 }

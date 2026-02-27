@@ -10,10 +10,29 @@ export interface BrowserProfile {
   color?: string;
   custom_args: string[];
   tags: string[];
+  headless?: boolean;
+}
+
+export type CftChannel = 'Stable' | 'Beta' | 'Dev' | 'Canary';
+
+export type BrowserSource =
+  | {
+      type: 'chrome_for_testing';
+      channel: CftChannel;
+      version?: string;
+      download_dir?: string;
+    }
+  | { type: 'custom'; path: string; fingerprint_chromium?: boolean };
+
+export interface CftVersionInfo {
+  channel: string;
+  version: string;
+  url: string;
+  platform: string;
 }
 
 export interface AppConfig {
-  chrome_path: string;
+  browser_source: BrowserSource;
   profiles: BrowserProfile[];
   settings: AppSettings;
 }
@@ -26,7 +45,14 @@ export interface AppSettings {
 export interface ProcessInfo {
   profile_id: string;
   pid: number;
+  cdp_port?: number;
   launched_at: number;
 }
 
 export type RunningStatus = Record<string, boolean>;
+
+export interface McpConfig {
+  enabled: boolean;
+  api_port: number;
+  api_key?: string;
+}

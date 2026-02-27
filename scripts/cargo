@@ -1,0 +1,6 @@
+#!/bin/sh
+# Wrapper to run cargo with ARGV0 unset.
+# Cursor's integrated terminal sets ARGV0 to "cursor", which makes rustup's
+# proxy think it's an invalid tool name. Unsetting ARGV0 fixes this.
+# Usage: ./scripts/cargo [args...]  or  make build  (Makefile uses this)
+exec env -u ARGV0 cargo "$@"

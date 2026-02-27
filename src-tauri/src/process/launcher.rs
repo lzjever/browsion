@@ -37,6 +37,11 @@ pub fn build_command(chrome_path: &Path, profile: &BrowserProfile, cdp_port: u16
         cmd.env("TZ", tz);
     }
 
+    // Headless mode (no visible window)
+    if profile.headless {
+        cmd.arg("--headless=new");
+    }
+
     // Stability and compatibility flags
     cmd.arg("--no-first-run");           // Skip first run wizards
     cmd.arg("--no-default-browser-check"); // Don't check if default browser
@@ -90,6 +95,7 @@ mod tests {
             color: None,
             custom_args: vec![],
             tags: vec![],
+            headless: false,
         };
 
         let cmd = build_command(Path::new("/usr/bin/google-chrome"), &profile, 9300);
@@ -117,6 +123,7 @@ mod tests {
             color: None,
             custom_args: vec!["--disable-gpu".to_string()],
             tags: vec![],
+            headless: false,
         };
 
         let cmd = build_command(Path::new("/usr/bin/google-chrome"), &profile, 9301);
@@ -130,5 +137,32 @@ mod tests {
         assert!(args.contains(&"--timezone=America/Los_Angeles".to_string()));
         assert!(args.contains(&"--disable-gpu".to_string()));
         assert!(args.contains(&"--remote-debugging-port=9301".to_string()));
+        assert!(!args.contains(&"--headless=new".to_string()));
+    }
+
+    #[test]
+    fn test_build_command_headless() {
+        let profile = BrowserProfile {
+            id: "test".to_string(),
+            name: "Test".to_string(),
+            description: "".to_string(),
+            user_data_dir: PathBuf::from("/tmp/chrome-profile"),
+            proxy_server: None,
+            lang: "en-US".to_string(),
+            timezone: None,
+            fingerprint: None,
+            color: None,
+            custom_args: vec![],
+            tags: vec![],
+            headless: true,
+        };
+
+        let cmd = build_command(Path::new("/usr/bin/google-chrome"), &profile, 9302);
+        let args: Vec<String> = cmd
+            .get_args()
+            .map(|s| s.to_string_lossy().to_string())
+            .collect();
+
+        assert!(args.contains(&"--headless=new".to_string()));
     }
 }

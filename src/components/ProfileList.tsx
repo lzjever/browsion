@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { listen } from '@tauri-apps/api/event';
 import { ProfileItem } from './ProfileItem';
 import { tauriApi } from '../api/tauri';
 import type { BrowserProfile, RunningStatus } from '../types/profile';
@@ -48,7 +49,20 @@ export const ProfileList: React.FC<ProfileListProps> = ({ onEditProfile, onClone
   useEffect(() => {
     loadProfiles();
 
-    // Refresh status every 2 seconds
+    // Listen for real-time events from backend (MCP or tray actions)
+    const unlistenProfiles = listen('profiles-changed', () => {
+      loadProfiles();
+    });
+    const unlistenStatus = listen('browser-status-changed', async () => {
+      try {
+        const status = await tauriApi.getRunningProfiles();
+        setRunningStatus(status);
+      } catch (err) {
+        console.error('Failed to refresh status:', err);
+      }
+    });
+
+    // Polling as fallback for process crashes not yet detected by cleanup task
     const interval = setInterval(async () => {
       try {
         const status = await tauriApi.getRunningProfiles();
@@ -56,9 +70,13 @@ export const ProfileList: React.FC<ProfileListProps> = ({ onEditProfile, onClone
       } catch (err) {
         console.error('Failed to refresh status:', err);
       }
-    }, 2000);
+    }, 5000);
 
-    return () => clearInterval(interval);
+    return () => {
+      unlistenProfiles.then((f) => f());
+      unlistenStatus.then((f) => f());
+      clearInterval(interval);
+    };
   }, []);
 
   useEffect(() => {

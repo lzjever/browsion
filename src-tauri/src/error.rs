@@ -25,6 +25,21 @@ pub enum BrowsionError {
 
     #[error("Validation error: {0}")]
     Validation(String),
+
+    #[error("Browser not running: {0}")]
+    BrowserNotRunning(String),
+
+    #[error("CDP connection failed: {0}")]
+    CdpConnection(String),
+
+    #[error("CDP command error: {0}")]
+    CdpCommand(String),
+
+    #[error("Element not found: {0}")]
+    ElementNotFound(String),
+
+    #[error("Timeout: {0}")]
+    Timeout(String),
 }
 
 pub type Result<T> = std::result::Result<T, BrowsionError>;
