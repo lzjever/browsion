@@ -1,7 +1,7 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import { tauriApi } from '../api/tauri';
-import type { AppSettings, BrowserSource, CftVersionInfo, McpConfig } from '../types/profile';
+import type { AppSettings, BrowserSource, CftVersionInfo } from '../types/profile';
 import { open } from '@tauri-apps/plugin-dialog';
 
 type CftDownloadProgress =
@@ -37,14 +37,6 @@ export const Settings: React.FC = () => {
   const [success, setSuccess] = useState<string | null>(null);
   const successRef = React.useRef<HTMLDivElement>(null);
 
-  // MCP / API Server
-  const [mcpConfig, setMcpConfig] = useState<McpConfig>({
-    enabled: true,
-    api_port: 38472,
-  });
-  const [mcpSaving, setMcpSaving] = useState(false);
-  const [mcpStatus, setMcpStatus] = useState<'checking' | 'running' | 'stopped'>('checking');
-
   useEffect(() => {
     loadSettings();
   }, []);
@@ -78,16 +70,14 @@ export const Settings: React.FC = () => {
   const loadSettings = async () => {
     try {
       setLoading(true);
-      const [path, source, appSettings, mcp] = await Promise.all([
+      const [path, source, appSettings] = await Promise.all([
         tauriApi.getChromePath(),
         tauriApi.getBrowserSource(),
         tauriApi.getSettings(),
-        tauriApi.getMcpConfig(),
       ]);
       setEffectivePath(path);
       setBrowserSource(source);
       setSettings(appSettings);
-      setMcpConfig(mcp);
       if (source?.type === 'custom') {
         setCustomPath(source.path);
         setFingerprintChromium(source.fingerprint_chromium ?? false);
@@ -233,68 +223,6 @@ export const Settings: React.FC = () => {
       setSettings(settings);
     }
   };
-
-  const checkMcpStatus = useCallback(async () => {
-    if (!mcpConfig.enabled || mcpConfig.api_port === 0) {
-      setMcpStatus('stopped');
-      return;
-    }
-    try {
-      const resp = await fetch(`http://127.0.0.1:${mcpConfig.api_port}/api/health`);
-      setMcpStatus(resp.ok ? 'running' : 'stopped');
-    } catch {
-      setMcpStatus('stopped');
-    }
-  }, [mcpConfig.enabled, mcpConfig.api_port]);
-
-  useEffect(() => {
-    if (!loading) {
-      checkMcpStatus();
-    }
-  }, [loading, checkMcpStatus]);
-
-  const handleMcpSave = async () => {
-    try {
-      setMcpSaving(true);
-      setError(null);
-      await tauriApi.updateMcpConfig(mcpConfig);
-      setSuccess('MCP / API server configuration saved');
-      setTimeout(() => setSuccess(null), 3000);
-      // Give server a moment to start, then check status
-      setTimeout(() => checkMcpStatus(), 500);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setMcpSaving(false);
-    }
-  };
-
-  const generateApiKey = () => {
-    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-    const array = new Uint8Array(32);
-    crypto.getRandomValues(array);
-    let key = 'sk-';
-    for (let i = 0; i < 32; i++) {
-      key += chars[array[i] % chars.length];
-    }
-    setMcpConfig({ ...mcpConfig, api_key: key });
-  };
-
-  const mcpClientConfig = JSON.stringify(
-    {
-      mcpServers: {
-        browsion: {
-          command: 'browsion-mcp',
-          env: {
-            BROWSION_API_PORT: String(mcpConfig.api_port),
-            ...(mcpConfig.api_key ? { BROWSION_API_KEY: mcpConfig.api_key } : {}),
-          },
-        },
-      },
-    },
-    null,
-    2
-  );
 
   if (loading) {
     return <div className="loading">Loading settings...</div>;
@@ -473,107 +401,6 @@ export const Settings: React.FC = () => {
             {saving ? 'Saving…' : 'Use custom path'}
           </button>
             </div>
-          </div>
-        </div>
-
-        <div className="settings-section">
-          <h3>MCP / API Server</h3>
-
-          <div className="checkbox-group">
-            <label>
-              <input
-                type="checkbox"
-                checked={mcpConfig.enabled}
-                onChange={(e) =>
-                  setMcpConfig({ ...mcpConfig, enabled: e.target.checked })
-                }
-              />
-              <span>Enable API server</span>
-            </label>
-          </div>
-
-          <div className="form-group">
-            <label>Port</label>
-            <input
-              type="number"
-              min={1024}
-              max={65535}
-              value={mcpConfig.api_port}
-              onChange={(e) =>
-                setMcpConfig({
-                  ...mcpConfig,
-                  api_port: parseInt(e.target.value) || 38472,
-                })
-              }
-              disabled={!mcpConfig.enabled}
-            />
-          </div>
-
-          <div className="form-group">
-            <label>API Key (optional)</label>
-            <div className="input-with-buttons">
-              <input
-                type="text"
-                value={mcpConfig.api_key ?? ''}
-                onChange={(e) =>
-                  setMcpConfig({
-                    ...mcpConfig,
-                    api_key: e.target.value || undefined,
-                  })
-                }
-                placeholder="No authentication"
-                disabled={!mcpConfig.enabled}
-              />
-              <button
-                className="btn btn-secondary btn-small"
-                onClick={generateApiKey}
-                disabled={!mcpConfig.enabled}
-              >
-                Generate
-              </button>
-              <button
-                className="btn btn-secondary btn-small"
-                onClick={() => {
-                  if (mcpConfig.api_key) {
-                    navigator.clipboard.writeText(mcpConfig.api_key);
-                  }
-                }}
-                disabled={!mcpConfig.enabled || !mcpConfig.api_key}
-              >
-                Copy
-              </button>
-            </div>
-          </div>
-
-          <div className="mcp-status-row">
-            <span className="mcp-status-label">Status:</span>
-            <span className={`mcp-status-badge mcp-status-${mcpStatus}`}>
-              {mcpStatus === 'running'
-                ? `Running on http://127.0.0.1:${mcpConfig.api_port}`
-                : mcpStatus === 'checking'
-                  ? 'Checking…'
-                  : 'Stopped'}
-            </span>
-          </div>
-
-          <button
-            className="btn btn-primary"
-            onClick={handleMcpSave}
-            disabled={mcpSaving}
-            style={{ marginBottom: '16px' }}
-          >
-            {mcpSaving ? 'Saving…' : 'Apply'}
-          </button>
-
-          <div className="mcp-config-snippet">
-            <label>MCP Client Config (for Claude Desktop / Cursor)</label>
-            <pre className="mcp-config-code">{mcpClientConfig}</pre>
-            <button
-              className="btn btn-secondary btn-small"
-              onClick={() => navigator.clipboard.writeText(mcpClientConfig)}
-            >
-              Copy Config
-            </button>
           </div>
         </div>
 

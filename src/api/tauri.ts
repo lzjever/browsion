@@ -1,5 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
-import type { BrowserProfile, AppSettings, RunningStatus, McpConfig } from '../types/profile';
+import type { BrowserProfile, AppSettings, RunningStatus, McpConfig, McpToolInfo } from '../types/profile';
 import type { BrowserSource, CftVersionInfo } from '../types/profile';
 
 export const tauriApi = {
@@ -85,5 +85,30 @@ export const tauriApi = {
 
   async updateMcpConfig(mcp: McpConfig): Promise<void> {
     return invoke('update_mcp_config', { mcp });
+  },
+
+  // MCP Tool Config Writer
+  async detectMcpTools(): Promise<McpToolInfo[]> {
+    return invoke('detect_mcp_tools');
+  },
+
+  async writeBrowsionToTool(
+    toolId: string,
+    binaryPath: string,
+    apiPort: number,
+    apiKey?: string,
+    projectDir?: string
+  ): Promise<string> {
+    return invoke('write_browsion_to_tool', {
+      toolId,
+      binaryPath,
+      projectDir: projectDir ?? null,
+      apiPort,
+      apiKey: apiKey ?? null,
+    });
+  },
+
+  async findMcpBinary(): Promise<string | null> {
+    return invoke('find_mcp_binary');
   },
 };

@@ -2,10 +2,11 @@ import { useState } from 'react';
 import { ProfileList } from './components/ProfileList';
 import { ProfileForm } from './components/ProfileForm';
 import { Settings } from './components/Settings';
+import { McpPage } from './components/McpPage';
 import type { BrowserProfile } from './types/profile';
 import './styles/index.css';
 
-type View = 'profiles' | 'settings';
+type View = 'profiles' | 'settings' | 'mcp';
 
 function App() {
   const [currentView, setCurrentView] = useState<View>('profiles');
@@ -62,6 +63,12 @@ function App() {
           >
             Settings
           </button>
+          <button
+            className={`nav-btn ${currentView === 'mcp' ? 'active' : ''}`}
+            onClick={() => setCurrentView('mcp')}
+          >
+            MCP
+          </button>
         </nav>
       </header>
 
@@ -83,6 +90,8 @@ function App() {
         )}
 
         {currentView === 'settings' && <Settings />}
+
+        {currentView === 'mcp' && <McpPage />}
       </main>
 
       {showProfileForm && (

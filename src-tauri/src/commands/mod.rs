@@ -1,3 +1,6 @@
+pub mod mcp_tools;
+pub use mcp_tools::{detect_mcp_tools, find_mcp_binary, write_browsion_to_tool};
+
 use crate::config::schema::BrowserSource;
 use crate::config::{validation, BrowserProfile};
 use crate::cft::{ensure_chrome_binary, fetch_versions, get_platform, CftProgress};

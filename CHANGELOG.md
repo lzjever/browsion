@@ -2,6 +2,37 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.0] - 2026-02-28
+
+### Added
+
+#### Dedicated MCP Page + Skill Mode
+- New **MCP** top-level tab (alongside Profiles and Settings)
+- **API Server** section: enable/disable toggle, port input, API key with Generate/Copy, live status badge, Apply button — migrated from Settings and enhanced
+- **MCP Binary** section: auto-detects `browsion-mcp` at install path, macOS bundle Resources, and dev `target/release/`; user-editable path with Browse button; collapsible build instructions
+- **Client Setup** section: one-click config writer for 7 AI coding tools:
+  - **Cursor** — merges into `~/.cursor/mcp.json` (`mcpServers.browsion`)
+  - **Claude Code** — merges into `~/.claude.json` (`mcpServers.browsion`)
+  - **Codex CLI** — merges into `~/.codex/config.toml` (TOML `[mcp_servers.browsion]`)
+  - **Windsurf** — merges into `~/.codeium/windsurf/mcp_config.json`
+  - **Zed** — merges into platform `settings.json` (`context_servers.browsion`)
+  - **Continue (VS Code)** — creates/merges `.continue/mcpServers/browsion.json` (project-scoped)
+  - **OpenClaw** — merges into `openclaw.json` in your project directory (project-scoped)
+- Per-tool status dots (green = config found, grey = not yet configured)
+- Per-tool config snippet with Copy button (correct format per tool: JSON / TOML / Zed `context_servers` / Continue whole-file)
+- **New Tauri commands**: `detect_mcp_tools`, `write_browsion_to_tool`, `find_mcp_binary`
+
+#### Config Write Safety
+- All writes are **atomic** (temp file → `rename`) — partial writes never corrupt your config
+- All writes **merge** into existing config, preserving every other entry — safe to run on an existing file
+- JSONC support for Zed's `settings.json` (strips `//` and `/* */` comments before parse; note: comments are not re-emitted)
+- Parse failure on existing file surfaces as an error — original file is never touched
+
+### Changed
+- **Settings page**: MCP/API Server section removed; Settings now contains only Browser and Application Settings
+- `Write to config` button disabled when API Server config has unsaved changes (prevents writing a stale port/key)
+- Port field no longer snaps to `38472` when cleared — uses a string editing buffer committed on blur
+
 ## [0.3.0] - 2026-02-27
 
 ### Added

@@ -115,6 +115,9 @@ pub fn run() {
             commands::get_recent_profiles,
             commands::get_mcp_config,
             commands::update_mcp_config,
+            commands::mcp_tools::detect_mcp_tools,
+            commands::mcp_tools::write_browsion_to_tool,
+            commands::mcp_tools::find_mcp_binary,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

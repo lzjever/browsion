@@ -1778,3 +1778,167 @@ input.readonly {
   gap: 0.75rem;
   justify-content: flex-end;
 }
+
+/* ===================== MCP Page ===================== */
+
+.mcp-page {
+  /* inherits settings-container layout */
+}
+
+/* Tool tab bar */
+.mcp-tool-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 16px;
+}
+
+.mcp-tool-tabs .tab-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: white;
+  cursor: pointer;
+  font-size: 0.875rem;
+  color: var(--text-color);
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.mcp-tool-tabs .tab-btn:hover {
+  background: var(--light-bg);
+}
+
+.mcp-tool-tabs .tab-btn.active {
+  background: var(--primary-color);
+  color: white;
+  border-color: var(--primary-color);
+}
+
+/* Tool status dot (green/grey on tab) */
+.tool-status-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.tool-status-dot.found {
+  background: var(--success-color);
+}
+
+.tool-status-dot.not-found {
+  background: var(--border-color);
+}
+
+.mcp-tool-tabs .tab-btn.active .tool-status-dot.found {
+  background: #a7f3c0;
+}
+
+.mcp-tool-tabs .tab-btn.active .tool-status-dot.not-found {
+  background: rgba(255, 255, 255, 0.4);
+}
+
+/* Tool panel */
+.tool-panel {
+  padding-top: 4px;
+}
+
+.tool-detection-line {
+  margin-bottom: 10px;
+  font-size: 0.875rem;
+}
+
+.tool-found {
+  color: var(--success-color);
+}
+
+.tool-not-found {
+  color: var(--text-light);
+}
+
+.tool-detection-line code {
+  font-family: 'SFMono-Regular', Consolas, monospace;
+  font-size: 0.8125rem;
+  background: var(--light-bg);
+  padding: 1px 4px;
+  border-radius: 3px;
+  word-break: break-all;
+}
+
+.tool-description {
+  font-size: 0.875rem;
+  color: var(--text-light);
+  line-height: 1.5;
+  margin-bottom: 14px;
+}
+
+/* Write success banner */
+.write-success-banner {
+  margin-top: 10px;
+  padding: 8px 12px;
+  background: #d4edda;
+  border: 1px solid #c3e6cb;
+  border-radius: 6px;
+  color: #155724;
+  font-size: 0.875rem;
+  font-family: 'SFMono-Regular', Consolas, monospace;
+  word-break: break-all;
+}
+
+/* Binary status badge */
+.binary-status-row {
+  margin-bottom: 12px;
+}
+
+.binary-status-badge {
+  display: inline-block;
+  padding: 4px 10px;
+  border-radius: 12px;
+  font-size: 0.8125rem;
+  font-weight: 500;
+}
+
+.binary-status-badge.found {
+  background: #d4edda;
+  color: #155724;
+}
+
+.binary-status-badge.not-found {
+  background: #f8d7da;
+  color: #721c24;
+}
+
+/* Build instructions */
+.build-instructions {
+  margin-top: 8px;
+}
+
+/* Apply row with unsaved indicator */
+.apply-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.unsaved-indicator {
+  font-size: 0.8rem;
+  color: var(--warning-color);
+  font-weight: 500;
+}
+
+/* Binary unverified badge */
+.binary-status-badge.unverified {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+/* Tool write warning for unsaved API changes */
+.tool-warn-unsaved {
+  margin-top: 10px;
+  color: var(--warning-color) !important;
+}

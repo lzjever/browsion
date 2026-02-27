@@ -56,3 +56,13 @@ export interface McpConfig {
   api_port: number;
   api_key?: string;
 }
+
+export type ToolScope = 'global' | 'project_scoped';
+
+export interface McpToolInfo {
+  id: string;
+  name: string;
+  config_path: string;
+  found: boolean;
+  scope: ToolScope;
+}
