@@ -147,6 +147,37 @@ impl std::fmt::Display for StepType {
     }
 }
 
+impl From<crate::recording::RecordedActionType> for StepType {
+    fn from(value: crate::recording::RecordedActionType) -> Self {
+        match value {
+            crate::recording::RecordedActionType::Navigate => StepType::Navigate,
+            crate::recording::RecordedActionType::GoBack => StepType::GoBack,
+            crate::recording::RecordedActionType::GoForward => StepType::GoForward,
+            crate::recording::RecordedActionType::Reload => StepType::Reload,
+            crate::recording::RecordedActionType::Click => StepType::Click,
+            crate::recording::RecordedActionType::Hover => StepType::Hover,
+            crate::recording::RecordedActionType::DoubleClick => StepType::DoubleClick,
+            crate::recording::RecordedActionType::RightClick => StepType::RightClick,
+            crate::recording::RecordedActionType::Type => StepType::Type,
+            crate::recording::RecordedActionType::SlowType => StepType::SlowType,
+            crate::recording::RecordedActionType::PressKey => StepType::PressKey,
+            crate::recording::RecordedActionType::SelectOption => StepType::SelectOption,
+            crate::recording::RecordedActionType::UploadFile => StepType::UploadFile,
+            crate::recording::RecordedActionType::Scroll => StepType::Scroll,
+            crate::recording::RecordedActionType::ScrollIntoView => StepType::ScrollIntoView,
+            crate::recording::RecordedActionType::NewTab => StepType::NewTab,
+            crate::recording::RecordedActionType::SwitchTab => StepType::SwitchTab,
+            crate::recording::RecordedActionType::CloseTab => StepType::CloseTab,
+            crate::recording::RecordedActionType::Sleep => StepType::Sleep,
+            crate::recording::RecordedActionType::WaitForText => StepType::WaitForText,
+            crate::recording::RecordedActionType::WaitForElement => StepType::WaitForElement,
+            crate::recording::RecordedActionType::Screenshot => StepType::Screenshot,
+            crate::recording::RecordedActionType::GetConsoleLogs => StepType::GetConsoleLogs,
+            crate::recording::RecordedActionType::Extract => StepType::Extract,
+        }
+    }
+}
+
 /// A workflow execution instance.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkflowExecution {

@@ -5,6 +5,7 @@ pub mod config;
 pub mod cft;
 pub mod error;
 pub mod process;
+pub mod recording;
 pub mod state;
 pub mod tray;
 pub mod window;
@@ -177,6 +178,11 @@ pub fn run() {
             commands::workflow::run_workflow,
             commands::workflow::validate_workflow_step,
             commands::workflow::get_step_types,
+            commands::recording::list_recordings,
+            commands::recording::get_recording,
+            commands::recording::save_recording,
+            commands::recording::delete_recording,
+            commands::recording::recording_to_workflow,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
