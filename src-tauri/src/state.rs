@@ -3,6 +3,7 @@ use crate::api::action_log::ActionLog;
 use crate::api::ws::WsBroadcaster;
 use crate::config::AppConfig;
 use crate::process::ProcessManager;
+use crate::workflow::WorkflowManager;
 use parking_lot::{Mutex, RwLock};
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter};
@@ -21,6 +22,8 @@ pub struct AppState {
     pub action_log: Arc<ActionLog>,
     /// WebSocket broadcaster for real-time events.
     pub ws_broadcaster: WsBroadcaster,
+    /// Workflow manager for automation workflows.
+    pub workflow_manager: Arc<WorkflowManager>,
 }
 
 impl AppState {
@@ -34,6 +37,7 @@ impl AppState {
             app_handle: Arc::new(Mutex::new(None)),
             action_log: Arc::new(ActionLog::new()),
             ws_broadcaster: WsBroadcaster::new(),
+            workflow_manager: Arc::new(WorkflowManager::new().unwrap_or_default()),
         }
     }
 

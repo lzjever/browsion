@@ -8,6 +8,7 @@ pub mod process;
 pub mod state;
 pub mod tray;
 pub mod window;
+pub mod workflow;
 
 use std::sync::Arc;
 use state::AppState;
@@ -169,6 +170,13 @@ pub fn run() {
             commands::snapshots::create_snapshot,
             commands::snapshots::restore_snapshot,
             commands::snapshots::delete_snapshot,
+            commands::workflow::list_workflows,
+            commands::workflow::get_workflow,
+            commands::workflow::save_workflow,
+            commands::workflow::delete_workflow,
+            commands::workflow::run_workflow,
+            commands::workflow::validate_workflow_step,
+            commands::workflow::get_step_types,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
