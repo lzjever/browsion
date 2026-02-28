@@ -1,5 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
-import type { BrowserProfile, AppSettings, RunningStatus, McpConfig, McpToolInfo, ProxyPreset, SnapshotInfo, Workflow, WorkflowExecution, StepTypeInfo } from '../types/profile';
+import type { BrowserProfile, AppSettings, RunningStatus, McpConfig, McpToolInfo, ProxyPreset, SnapshotInfo, Workflow, WorkflowExecution, StepTypeInfo, Recording } from '../types/profile';
 import type { BrowserSource, CftVersionInfo } from '../types/profile';
 
 export const tauriApi = {
@@ -181,5 +181,26 @@ export const tauriApi = {
 
   async getStepTypes(): Promise<StepTypeInfo[]> {
     return invoke('get_step_types');
+  },
+
+  // Recordings
+  async listRecordings(): Promise<Recording[]> {
+    return invoke('list_recordings');
+  },
+
+  async getRecording(id: string): Promise<Recording> {
+    return invoke('get_recording', { id });
+  },
+
+  async saveRecording(recording: Recording): Promise<Recording> {
+    return invoke('save_recording', { recording });
+  },
+
+  async deleteRecording(id: string): Promise<void> {
+    return invoke('delete_recording', { id });
+  },
+
+  async recordingToWorkflow(recordingId: string, workflowName: string): Promise<Workflow> {
+    return invoke('recording_to_workflow', { recordingId, workflowName });
   },
 };

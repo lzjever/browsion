@@ -5,10 +5,11 @@ import { Settings } from './components/Settings';
 import { McpPage } from './components/McpPage';
 import { MonitorPage } from './components/MonitorPage';
 import { WorkflowList } from './components/WorkflowList';
+import { RecordingList } from './components/RecordingList';
 import type { BrowserProfile } from './types/profile';
 import './styles/index.css';
 
-type View = 'profiles' | 'settings' | 'mcp' | 'monitor' | 'workflows';
+type View = 'profiles' | 'settings' | 'mcp' | 'monitor' | 'workflows' | 'recordings';
 
 function App() {
   const [currentView, setCurrentView] = useState<View>('profiles');
@@ -98,6 +99,12 @@ function App() {
           >
             Workflows
           </button>
+          <button
+            className={`nav-btn ${currentView === 'recordings' ? 'active' : ''}`}
+            onClick={() => setCurrentView('recordings')}
+          >
+            Recordings
+          </button>
         </nav>
       </header>
 
@@ -125,6 +132,8 @@ function App() {
         {currentView === 'monitor' && <MonitorPage />}
 
         {currentView === 'workflows' && <WorkflowList profiles={profiles} />}
+
+        {currentView === 'recordings' && <RecordingList profiles={profiles} />}
       </main>
 
       {showProfileForm && (

@@ -192,3 +192,48 @@ export interface ParamInfo {
   required: boolean;
   description: string;
 }
+
+// Recording types
+export type RecordedActionType =
+  | 'navigate'
+  | 'go_back'
+  | 'go_forward'
+  | 'reload'
+  | 'click'
+  | 'hover'
+  | 'double_click'
+  | 'right_click'
+  | 'type'
+  | 'slow_type'
+  | 'press_key'
+  | 'select_option'
+  | 'upload_file'
+  | 'scroll'
+  | 'scroll_into_view'
+  | 'new_tab'
+  | 'switch_tab'
+  | 'close_tab'
+  | 'sleep'
+  | 'wait_for_text'
+  | 'wait_for_element'
+  | 'screenshot'
+  | 'get_console_logs'
+  | 'extract';
+
+export interface RecordedAction {
+  index: number;
+  type: RecordedActionType;
+  params: Record<string, unknown>;
+  timestamp_ms: number;
+  screenshot_base64: string | null;
+}
+
+export interface Recording {
+  id: string;
+  name: string;
+  description: string;
+  profile_id: string;
+  actions: RecordedAction[];
+  created_at: number;
+  duration_ms: number;
+}

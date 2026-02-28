@@ -2586,3 +2586,186 @@ input.readonly {
   font-size: 0.85rem;
   margin-top: 4px;
 }
+
+/* ── Recording Page ───────────────────────────────────────────────────────── */
+
+.recording-list {
+  padding: 16px;
+}
+
+.recording-list-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+}
+
+.recording-empty-state {
+  text-align: center;
+  padding: 40px;
+}
+
+.recording-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 16px;
+}
+
+.recording-card {
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 16px;
+  background: var(--bg-secondary);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.recording-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.recording-card-header h3 {
+  margin: 0;
+  font-size: 1.1rem;
+}
+
+.recording-meta {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.recording-description {
+  margin: 0;
+  font-size: 0.9rem;
+  color: var(--text-muted);
+  flex-grow: 1;
+}
+
+.recording-meta-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.recording-meta-info small {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.recording-card-footer {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+/* Recording Player Modal */
+
+.recording-player {
+  max-width: 700px;
+  width: 90vw;
+}
+
+.recording-player-body {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.recording-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.progress-bar {
+  height: 8px;
+  background: var(--bg-primary);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  background: var(--primary-color);
+  transition: width 0.3s ease;
+}
+
+.progress-text {
+  font-size: 0.9rem;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+.recording-actions-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.recorded-action-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background: var(--bg-secondary);
+  transition: all 0.2s;
+}
+
+.recorded-action-item.current {
+  border-color: var(--primary-color);
+  background: rgba(67, 97, 238, 0.1);
+  animation: pulse 1.5s infinite;
+}
+
+.recorded-action-item.done {
+  opacity: 0.6;
+}
+
+.action-number {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--bg-primary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.75rem;
+  font-weight: bold;
+}
+
+.action-type {
+  flex: 1;
+  font-size: 0.9rem;
+}
+
+.action-time {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.action-status {
+  font-size: 0.75rem;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.action-status.done {
+  background: #22c55e;
+  color: white;
+}
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.7;
+  }
+}

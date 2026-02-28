@@ -2,6 +2,47 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.8.0] - 2026-02-28
+
+### Added
+
+#### Recording & Playback (Phase 3)
+- **Recording Engine** — capture browser automation sequences
+- **Recording Manager** — persists to `~/.browsion/recordings/{id}.json`
+- **15+ Recordable Action Types**:
+  - Navigation: navigate, go_back, go_forward, reload
+  - Mouse: click, hover, double_click, right_click
+  - Keyboard: type, slow_type, press_key
+  - Forms: select_option, upload_file
+  - Scroll: scroll, scroll_into_view
+  - Tabs: new_tab, switch_tab, close_tab
+  - Wait: sleep, wait_for_text, wait_for_element
+  - Observe: screenshot, get_console_logs, extract
+- **Action Metadata** — timestamp (ms from start), optional screenshot
+- **Playback Player** — execute recordings on any profile
+
+#### Frontend UI
+- **Recordings tab** — new top-level navigation section
+- **Recording List** — card grid with action count and duration
+- **Recording Player** — modal with:
+  - Profile selector
+  - Progress bar (current action / total)
+  - Action list with status indicators
+  - Playback controls with error handling
+- **Convert to Workflow** — transform recording into reusable workflow
+
+#### Backend Implementation
+- `recording/schema.rs` — Recording, RecordedAction, RecordingSession
+- `recording/manager.rs` — persistence to JSON files
+- `commands/recording.rs` — Tauri commands + workflow conversion
+- `AppState.recording_manager` field
+- `From<RecordedActionType> for StepType` conversion
+
+### Technical
+- Atomic file writes for recording persistence
+- Sequential action execution with error handling
+- One-click recording-to-workflow conversion
+
 ## [0.7.0] - 2026-02-28
 
 ### Added

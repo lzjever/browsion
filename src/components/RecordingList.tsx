@@ -1,0 +1,127 @@
+import React, { useState, useEffect } from 'react';
+import { tauriApi } from '../api/tauri';
+import type { Recording, BrowserProfile } from '../types/profile';
+import { RecordingPlayer } from './RecordingPlayer';
+
+interface RecordingListProps {
+  profiles: BrowserProfile[];
+}
+
+export const RecordingList: React.FC<RecordingListProps> = ({ profiles }) => {
+  const [recordings, setRecordings] = useState<Recording[]>([]);
+  const [playingRecording, setPlayingRecording] = useState<Recording | undefined>();
+  const [refreshKey, setRefreshKey] = useState(0);
+
+  useEffect(() => {
+    loadRecordings();
+  }, [refreshKey]);
+
+  const loadRecordings = async () => {
+    try {
+      const list = await tauriApi.listRecordings();
+      setRecordings(list);
+    } catch (e) {
+      console.error('Failed to load recordings:', e);
+    }
+  };
+
+  const handleDelete = async (id: string) => {
+    if (!confirm('Delete this recording?')) return;
+    try {
+      await tauriApi.deleteRecording(id);
+      setRefreshKey((prev) => prev + 1);
+    } catch (e) {
+      alert(`Failed to delete: ${e}`);
+    }
+  };
+
+  const handleConvertToWorkflow = async (recording: Recording) => {
+    const workflowName = prompt(
+      'Enter workflow name:',
+      `Workflow from ${recording.name}`
+    );
+    if (!workflowName) return;
+
+    try {
+      const workflow = await tauriApi.recordingToWorkflow(recording.id, workflowName);
+      await tauriApi.saveWorkflow(workflow);
+      alert('Workflow created successfully! Check the Workflows tab.');
+    } catch (e) {
+      alert(`Failed to create workflow: ${e}`);
+    }
+  };
+
+  const formatDuration = (ms: number) => {
+    if (ms < 1000) return `${ms}ms`;
+    const seconds = Math.floor(ms / 1000);
+    return `${seconds}s`;
+  };
+
+  const formatDate = (ts: number) => {
+    return new Date(ts).toLocaleString();
+  };
+
+  return (
+    <div className="recording-list">
+      <div className="recording-list-header">
+        <h2>Recordings</h2>
+      </div>
+
+      {recordings.length === 0 ? (
+        <div className="recording-empty-state">
+          <p className="muted">No recordings yet.</p>
+          <p className="muted">Recordings will be captured when you use browser automation.</p>
+          <p className="muted">You can also convert recordings to workflows for reuse.</p>
+        </div>
+      ) : (
+        <div className="recording-grid">
+          {recordings.map((recording) => (
+            <div key={recording.id} className="recording-card">
+              <div className="recording-card-header">
+                <h3>{recording.name}</h3>
+                <span className="recording-meta">
+                  {recording.actions.length} actions · {formatDuration(recording.duration_ms)}
+                </span>
+              </div>
+              {recording.description && (
+                <p className="recording-description">{recording.description}</p>
+              )}
+              <div className="recording-meta-info">
+                <small>Profile: {recording.profile_id}</small>
+                <small>Created: {formatDate(recording.created_at)}</small>
+              </div>
+              <div className="recording-card-footer">
+                <button
+                  className="btn btn-primary btn-sm"
+                  onClick={() => setPlayingRecording(recording)}
+                >
+                  ▶ Play
+                </button>
+                <button
+                  className="btn btn-secondary btn-sm"
+                  onClick={() => handleConvertToWorkflow(recording)}
+                >
+                  Convert to Workflow
+                </button>
+                <button
+                  className="btn btn-danger-outline btn-sm"
+                  onClick={() => handleDelete(recording.id)}
+                >
+                  Delete
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {playingRecording && (
+        <RecordingPlayer
+          recording={playingRecording}
+          profiles={profiles}
+          onClose={() => setPlayingRecording(undefined)}
+        />
+      )}
+    </div>
+  );
+};
