@@ -1,6 +1,6 @@
 //! Active recording session management.
 
-use crate::recording::schema::{Recording, RecordingSession, RecordedAction, RecordedActionType, RecordingSessionInfo};
+use crate::recording::schema::{Recording, RecordingSession, RecordedActionType, RecordingSessionInfo};
 use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -68,7 +68,7 @@ impl RecordingSessionManager {
     /// Check if a profile has an active recording session.
     pub fn is_recording(&self, profile_id: &str) -> bool {
         let sessions = self.sessions.lock();
-        sessions.get(profile_id).map_or(false, |s| s.is_recording)
+        sessions.get(profile_id).is_some_and(|s| s.is_recording)
     }
 
     /// Get all active recording sessions.

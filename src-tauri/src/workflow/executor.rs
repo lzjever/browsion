@@ -8,6 +8,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// Executes workflow steps against a running browser.
 pub struct WorkflowExecutor {
+    #[allow(dead_code)]
     session_manager: Arc<SessionManager>,
     /// Base URL for HTTP API (localhost:port).
     api_base: String,
@@ -277,6 +278,7 @@ impl WorkflowExecutor {
     }
 
     /// Add API key header to a request builder if configured.
+    #[allow(dead_code)]
     fn add_api_key(
         &self,
         req: reqwest::RequestBuilder,

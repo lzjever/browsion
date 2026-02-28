@@ -1,7 +1,7 @@
 //! Tauri commands for workflow management.
 
 use crate::state::AppState;
-use crate::workflow::{ExecutionStatus, StepType, Workflow, WorkflowExecution};
+use crate::workflow::{StepType, Workflow, WorkflowExecution};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -93,17 +93,36 @@ pub async fn validate_workflow_step(step: serde_json::Value) -> Result<bool, Str
     // Validate params based on step type
     match step_type {
         StepType::Navigate => {
-            if !step.get("url").and_then(|v| v.as_str()).map_or(false, |s| !s.is_empty()) {
+            if step
+                .get("url")
+                .and_then(|v| v.as_str())
+                .is_none_or(|s| s.is_empty())
+            {
                 return Err("Navigate step requires 'url' parameter".to_string());
             }
         }
-        StepType::Click | StepType::Type | StepType::Hover => {
-            if !step.get("selector").and_then(|v| v.as_str()).map_or(false, |s| !s.is_empty()) {
+        StepType::Click | StepType::Hover => {
+            if step
+                .get("selector")
+                .and_then(|v| v.as_str())
+                .is_none_or(|s| s.is_empty())
+            {
                 return Err(format!("{} step requires 'selector' parameter", step_type));
             }
         }
         StepType::Type => {
-            if !step.get("text").and_then(|v| v.as_str()).map_or(false, |s| !s.is_empty()) {
+            if step
+                .get("selector")
+                .and_then(|v| v.as_str())
+                .is_none_or(|s| s.is_empty())
+            {
+                return Err(format!("{} step requires 'selector' parameter", step_type));
+            }
+            if step
+                .get("text")
+                .and_then(|v| v.as_str())
+                .is_none_or(|s| s.is_empty())
+            {
                 return Err("Type step requires 'text' parameter".to_string());
             }
         }

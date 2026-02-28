@@ -1,6 +1,6 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { tauriApi } from '../api/tauri';
-import type { Workflow, BrowserProfile, WorkflowExecution, ExecutionStatus } from '../types/profile';
+import type { Workflow, BrowserProfile, WorkflowExecution, ExecutionStatus, RunningStatus } from '../types/profile';
 
 interface WorkflowRunModalProps {
   workflow: Workflow;
@@ -16,8 +16,22 @@ export const WorkflowRunModal: React.FC<WorkflowRunModalProps> = ({
   const [selectedProfileId, setSelectedProfileId] = useState('');
   const [execution, setExecution] = useState<WorkflowExecution | null>(null);
   const [running, setRunning] = useState(false);
+  const [runningStatus, setRunningStatus] = useState<RunningStatus>({});
 
-  const runningProfiles = profiles; // TODO: filter by actual running status
+  useEffect(() => {
+    const loadRunningStatus = async () => {
+      try {
+        const status = await tauriApi.getRunningProfiles();
+        setRunningStatus(status);
+      } catch (e) {
+        console.error('Failed to load running status:', e);
+      }
+    };
+    loadRunningStatus();
+  }, []);
+
+  // Filter profiles by running status
+  const runningProfiles = profiles.filter((p) => runningStatus[p.id]);
 
   const handleRun = async () => {
     if (!selectedProfileId) {

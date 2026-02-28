@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::env;
 use std::fs;
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct McpToolInfo {
@@ -88,7 +88,7 @@ pub async fn detect_mcp_tools() -> Result<Vec<McpToolInfo>, String> {
     Ok(tools)
 }
 
-fn get_zed_path(home: &PathBuf) -> PathBuf {
+fn get_zed_path(home: &Path) -> PathBuf {
     #[cfg(target_os = "macos")]
     {
         home.join("Library")
@@ -115,13 +115,13 @@ fn get_zed_path(home: &PathBuf) -> PathBuf {
 
 /// Atomic write: write to a temp file first, then rename.
 /// Prevents partial writes from corrupting an existing config file.
-fn atomic_write(path: &PathBuf, content: &str) -> io::Result<()> {
+fn atomic_write(path: &Path, content: &str) -> io::Result<()> {
     let parent = path
         .parent()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::Other, "path has no parent directory"))?;
+        .ok_or_else(|| io::Error::other("path has no parent directory"))?;
     let file_name = path
         .file_name()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::Other, "path has no file name"))?
+        .ok_or_else(|| io::Error::other("path has no file name"))?
         .to_string_lossy();
     let tmp_path = parent.join(format!(".browsion_{}.tmp", file_name));
 
@@ -133,10 +133,11 @@ fn atomic_write(path: &PathBuf, content: &str) -> io::Result<()> {
         fs::remove_file(path)?;
     }
 
-    fs::rename(&tmp_path, path).map_err(|e| {
-        let _ = fs::remove_file(&tmp_path); // clean up on failure
-        e
-    })?;
+    fs::rename(&tmp_path, path)
+        .inspect_err(|_| {
+            let _ = fs::remove_file(&tmp_path); // clean up on failure
+        })
+        ?;
 
     Ok(())
 }
@@ -206,7 +207,7 @@ fn strip_jsonc_comments(s: &str) -> String {
 
 /// Parse JSON from a string that may contain JSONC comments.
 /// Returns an error with a helpful message if parsing fails.
-fn parse_json_file(content: &str, path: &PathBuf) -> io::Result<serde_json::Value> {
+fn parse_json_file(content: &str, path: &Path) -> io::Result<serde_json::Value> {
     let stripped = strip_jsonc_comments(content);
     serde_json::from_str(&stripped).map_err(|e| {
         io::Error::new(
@@ -222,7 +223,7 @@ fn parse_json_file(content: &str, path: &PathBuf) -> io::Result<serde_json::Valu
 
 /// Read an existing JSON file (JSONC-aware), or return `{}` if it does not exist.
 /// Validates that the root is a JSON object.
-fn read_json_object(path: &PathBuf) -> io::Result<serde_json::Value> {
+fn read_json_object(path: &Path) -> io::Result<serde_json::Value> {
     let value = if path.exists() {
         let content = fs::read_to_string(path)?;
         parse_json_file(&content, path)?
@@ -268,7 +269,7 @@ fn build_server_entry(binary_path: &str, api_port: u16, api_key: Option<&str>) -
 /// Used by: cursor, claude_code, windsurf, openclaw
 /// Format: `{ "mcpServers": { "browsion": { ... } } }`
 fn write_json_mcpservers_to_path(
-    path: &PathBuf,
+    path: &Path,
     binary_path: &str,
     api_port: u16,
     api_key: Option<&str>,
@@ -283,7 +284,7 @@ fn write_json_mcpservers_to_path(
         fs::create_dir_all(parent)?;
     }
     let json = serde_json::to_string_pretty(&value)
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        .map_err(io::Error::other)?;
     atomic_write(path, &json)
 }
 
@@ -291,7 +292,7 @@ fn write_json_mcpservers_to_path(
 /// Format: `{ "context_servers": { "browsion": { "command": { "path": ..., "env": {...} } } } }`
 /// Zed's settings.json is JSONC — comments are stripped before parsing.
 fn write_json_zed_to_path(
-    path: &PathBuf,
+    path: &Path,
     binary_path: &str,
     api_port: u16,
     api_key: Option<&str>,
@@ -322,14 +323,14 @@ fn write_json_zed_to_path(
     // NOTE: writing back as plain JSON; comments from the original file are lost.
     // This is unavoidable without a JSONC-preserving serializer.
     let json = serde_json::to_string_pretty(&value)
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        .map_err(io::Error::other)?;
     atomic_write(path, &json)
 }
 
 /// Used by: codex
 /// Format: TOML `[mcp_servers.browsion]` with `command` and `[mcp_servers.browsion.env]`
 fn write_toml_codex_to_path(
-    path: &PathBuf,
+    path: &Path,
     binary_path: &str,
     api_port: u16,
     api_key: Option<&str>,
@@ -380,7 +381,7 @@ fn write_toml_codex_to_path(
         fs::create_dir_all(parent)?;
     }
     let toml_str =
-        toml::to_string_pretty(&table).map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        toml::to_string_pretty(&table).map_err(io::Error::other)?;
     atomic_write(path, &toml_str)
 }
 
@@ -389,7 +390,7 @@ fn write_toml_codex_to_path(
 /// Format: `{ "name": "browsion", "command": "...", "env": {...} }`
 /// Merges with existing file to preserve any extra user fields.
 fn write_json_continue_to_path(
-    path: &PathBuf,
+    path: &Path,
     binary_path: &str,
     api_port: u16,
     api_key: Option<&str>,
@@ -417,7 +418,7 @@ fn write_json_continue_to_path(
         fs::create_dir_all(parent)?;
     }
     let json = serde_json::to_string_pretty(&value)
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        .map_err(io::Error::other)?;
     atomic_write(path, &json)
 }
 

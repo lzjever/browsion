@@ -1,7 +1,6 @@
 //! Recording data structures for browser automation playback.
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 
 /// A recording of user actions in a browser session.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -126,7 +125,7 @@ impl RecordingSession {
         let duration_ms = now_ms().saturating_sub(self.started_at);
         Recording {
             id: self.id.clone(),
-            name: format!("Recording {}", self.id[..8].to_string()),
+            name: format!("Recording {}", &self.id[..8]),
             description: String::new(),
             profile_id: self.profile_id,
             actions: self.actions,

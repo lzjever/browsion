@@ -8,7 +8,7 @@ use crate::config::schema::{AppConfig, SnapshotInfo};
 use crate::process::ProcessManager;
 use crate::state::AppState;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::State;
@@ -55,9 +55,9 @@ async fn save_manifest(profile_id: &str, manifest: &Manifest) -> io::Result<()> 
 }
 
 /// Recursively compute total size of a directory.
-async fn dir_size(path: &PathBuf) -> u64 {
+async fn dir_size(path: &Path) -> u64 {
     let mut total = 0u64;
-    let mut stack = vec![path.clone()];
+    let mut stack = vec![path.to_path_buf()];
     while let Some(dir) = stack.pop() {
         let mut rd = match tokio::fs::read_dir(&dir).await {
             Ok(rd) => rd,

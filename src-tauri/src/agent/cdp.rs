@@ -273,9 +273,11 @@ impl CDPClient {
                     .and_then(|t| t["url"].as_str())
                     .unwrap_or("")
                     .to_string();
-                let mut tab = TabState::default();
-                tab.session_id = session_id;
-                tab.url = url;
+                let tab = TabState {
+                    session_id,
+                    url,
+                    ..Default::default()
+                };
                 reg.insert(target_id.clone(), tab);
             }
             *self.active_target_id.lock().await = target_id.clone();
@@ -377,9 +379,10 @@ impl CDPClient {
                                         if target_type == "page" {
                                             let mut reg = tab_registry.lock().await;
                                             reg.entry(target_id.clone()).or_insert_with(|| {
-                                                let mut s = TabState::default();
-                                                s.url = url;
-                                                s
+                                                TabState {
+                                                    url,
+                                                    ..Default::default()
+                                                }
                                             });
                                             tracing::debug!("New tab discovered: {}", target_id);
                                         }
@@ -1603,9 +1606,11 @@ impl CDPClient {
     // ── Screenshot ──────────────────────────────────────────────────
 
     /// Take a screenshot.
+    ///
     /// - `full_page`: capture the entire scrollable page (not just the visible viewport).
     /// - `format`: "png" (default), "jpeg", or "webp".
     /// - `quality`: compression quality for jpeg/webp (0–100, ignored for png).
+    ///
     /// Returns a base64-encoded image.
     pub async fn screenshot(
         &self,

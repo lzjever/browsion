@@ -1918,7 +1918,7 @@ pub fn app(state: ApiState, api_key: Option<String>) -> Router {
     use tower::limit::ConcurrencyLimitLayer;
     let state_for_log = state.clone();
     let base_router = router(state);
-    let app = if let Some(key) = api_key {
+    if let Some(key) = api_key {
         base_router
             .route_layer(middleware::from_fn_with_state(key, api_key_auth))
     } else {
@@ -1939,8 +1939,7 @@ pub fn app(state: ApiState, api_key: Option<String>) -> Router {
                 axum::http::header::CONTENT_TYPE,
                 axum::http::HeaderName::from_static("x-api-key"),
             ]),
-    );
-    app
+    )
 }
 
 pub async fn run_server(state: ApiState, port: u16, api_key: Option<String>) -> Result<(), String> {

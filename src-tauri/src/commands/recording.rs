@@ -1,6 +1,6 @@
 //! Tauri commands for recording management.
 
-use crate::recording::{Recording, RecordingManager, RecordingSessionManager, RecordingSessionInfo};
+use crate::recording::Recording;
 use crate::state::AppState;
 use crate::workflow::{Workflow, WorkflowStep};
 use std::collections::HashMap;
@@ -93,7 +93,6 @@ pub async fn recording_to_workflow(
 }
 
 /// Real-time recording commands
-
 /// Start recording for a profile.
 #[tauri::command]
 pub async fn start_recording(
