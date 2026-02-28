@@ -37,8 +37,8 @@ export const useWebSocket = (options: UseWebSocketOptions = {}) => {
   const [connected, setConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
-  const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const heartbeatTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const reconnectTimeoutRef = useRef<number | null>(null);
+  const heartbeatTimeoutRef = useRef<number | null>(null);
 
   const connect = async () => {
     try {
@@ -69,7 +69,7 @@ export const useWebSocket = (options: UseWebSocketOptions = {}) => {
             ws.close();
             setConnected(false);
           }
-        }, 35000); // 30s + 5s buffer
+        }, 35000) as unknown as number; // 30s + 5s buffer
       };
 
       ws.onmessage = (event) => {
@@ -82,7 +82,7 @@ export const useWebSocket = (options: UseWebSocketOptions = {}) => {
             ws.close();
             setConnected(false);
           }
-        }, 35000);
+        }, 35000) as unknown as number;
 
         try {
           const wsEvent: WsEvent = JSON.parse(event.data);
@@ -121,7 +121,7 @@ export const useWebSocket = (options: UseWebSocketOptions = {}) => {
         }
         reconnectTimeoutRef.current = setTimeout(() => {
           connect();
-        }, 3000);
+        }, 3000) as unknown as number;
       };
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -131,7 +131,7 @@ export const useWebSocket = (options: UseWebSocketOptions = {}) => {
       }
       reconnectTimeoutRef.current = setTimeout(() => {
         connect();
-      }, 5000);
+      }, 5000) as unknown as number;
     }
   };
 
