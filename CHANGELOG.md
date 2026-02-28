@@ -2,6 +2,42 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.6.0] - 2026-02-28
+
+### Added
+
+#### WebSocket Real-Time Events
+- **WebSocket server** at `/api/ws` for live event streaming
+- **Event types**:
+  - `BrowserStatusChanged` — browser launched or killed
+  - `ActionLogEntry` — new API action logged
+  - `ProfilesChanged` — profile added/updated/deleted
+  - `Heartbeat` — keep-alive every 30s
+- **Auto-reconnect** — clients reconnect after 3s on disconnect
+- **Monitor page** now uses WebSocket instead of polling for action log
+  - Action log entries appear instantly as they happen
+  - Browser status updates in real-time
+  - Screenshot polling remains (3s interval, no event needed)
+- **Connection indicator** — "● Live" / "○ Offline" status badge
+
+#### Frontend Hook
+- `useWebSocket` hook for real-time event subscriptions
+- Handles connection, reconnection, and event routing
+- Fallback to Tauri events still available
+
+### Changed
+- Monitor page action log updates via WebSocket push (no 5s polling)
+- Screenshot polling kept at 3s (images too large for WS push)
+- API event middleware now broadcasts to WebSocket clients
+- `AppState` includes `ws_broadcaster` field
+- API modules split: `ws.rs` (WebSocket), `profiles.rs`, `lifecycle.rs`, `browser.rs`, `snapshots.rs` (prepared for future refactoring)
+
+### Technical
+- Uses `tokio::sync::broadcast` for efficient fan-out to multiple clients
+- Channel capacity: 100 events per client
+- WebSocket authenticated via same-origin (localhost only)
+- Heartbeat timeout: 35s (auto-disconnect stale connections)
+
 ## [0.5.0] - 2026-02-28
 
 ### Added

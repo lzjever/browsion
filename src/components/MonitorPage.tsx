@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import { tauriApi } from '../api/tauri';
+import { useWebSocket, type BrowserStatusEvent, type ActionLogEntryEvent } from '../hooks/useWebSocket';
 import type { BrowserProfile, ActionEntry } from '../types/profile';
 
 interface Thumbnail {
@@ -29,10 +30,50 @@ export const MonitorPage: React.FC = () => {
   const runningIdsRef = useRef(runningIds);
   runningIdsRef.current = runningIds;
 
+  // WebSocket real-time updates
+  const { connected: wsConnected } = useWebSocket({
+    onBrowserStatus: useCallback((event: BrowserStatusEvent) => {
+      setRunningIds((prev) => {
+        if (event.running && !prev.includes(event.profile_id)) {
+          return [...prev, event.profile_id];
+        } else if (!event.running) {
+          return prev.filter((id) => id !== event.profile_id);
+        }
+        return prev;
+      });
+    }, []),
+    onActionLog: useCallback((entry: ActionLogEntryEvent) => {
+      setAllActions((prev) => {
+        const exists = prev.some((a) => a.id === entry.id);
+        if (exists) return prev;
+        return [entry, ...prev].slice(0, 200); // Keep max 200
+      });
+    }, []),
+    onProfilesChanged: useCallback(() => {
+      tauriApi.getProfiles().then(setProfiles).catch(console.error);
+    }, []),
+  });
+
   // Load initial data
   useEffect(() => {
     tauriApi.getProfiles().then(setProfiles).catch(console.error);
-    tauriApi.getMcpConfig().then((cfg) => setMcpConfig(cfg)).catch(console.error);
+    tauriApi.getMcpConfig().then(async (cfg) => {
+      setMcpConfig(cfg);
+      // Load initial action log history
+      if (cfg?.enabled) {
+        const headers: Record<string, string> = {};
+        if (cfg.api_key) headers['X-API-Key'] = cfg.api_key;
+        try {
+          const res = await fetch(`http://127.0.0.1:${cfg.api_port}/api/action_log?limit=200`, { headers });
+          if (res.ok) {
+            const data: ActionEntry[] = await res.json();
+            setAllActions(data);
+          }
+        } catch {
+          // ignore
+        }
+      }
+    }).catch(console.error);
 
     const loadRunning = async () => {
       try {
@@ -113,35 +154,13 @@ export const MonitorPage: React.FC = () => {
     }
   }, []);
 
-  // Action log polling (5s)
-  const pollActions = useCallback(async () => {
-    const cfg = mcpConfigRef.current;
-    if (!cfg || pausedRef.current) return;
-
-    const base = `http://127.0.0.1:${cfg.api_port}`;
-    const headers: Record<string, string> = {};
-    if (cfg.api_key) headers['X-API-Key'] = cfg.api_key;
-
-    try {
-      const res = await fetch(`${base}/api/action_log?limit=200`, { headers });
-      if (res.ok) {
-        const data: ActionEntry[] = await res.json();
-        setAllActions(data);
-      }
-    } catch {
-      // ignore
-    }
-  }, []);
-
   useEffect(() => {
     if (!mcpConfig) return;
 
-    // Initial fetch
+    // Initial fetch (action log loaded via WS, screenshots still polled)
     pollScreenshots();
-    pollActions();
 
     const ssInterval = setInterval(pollScreenshots, 3000);
-    const actInterval = setInterval(pollActions, 5000);
 
     // Pause when tab hidden
     const onVisChange = () => {
@@ -151,10 +170,9 @@ export const MonitorPage: React.FC = () => {
 
     return () => {
       clearInterval(ssInterval);
-      clearInterval(actInterval);
       document.removeEventListener('visibilitychange', onVisChange);
     };
-  }, [mcpConfig, pollScreenshots, pollActions]);
+  }, [mcpConfig, pollScreenshots]);
 
   const getProfileName = (id: string) =>
     profiles.find((p) => p.id === id)?.name ?? id;
@@ -237,7 +255,14 @@ export const MonitorPage: React.FC = () => {
 
   return (
     <div className="monitor-page">
-      <h2>Activity Monitor</h2>
+      <div className="monitor-page-header">
+        <h2>Activity Monitor</h2>
+        <div className="monitor-status">
+          <span className={`ws-indicator ${wsConnected ? 'connected' : 'disconnected'}`}>
+            {wsConnected ? '● Live' : '○ Offline'}
+          </span>
+        </div>
+      </div>
 
       {runningIds.length === 0 ? (
         <p className="muted">No browsers running. Launch a profile to see live data.</p>

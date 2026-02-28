@@ -2,6 +2,7 @@
 //! Profile CRUD, browser launch/kill, and full CDP browser control.
 
 pub mod action_log;
+pub mod ws;
 
 use crate::commands::get_effective_chrome_path_from_config;
 use crate::config::{validation, BrowserProfile};
@@ -96,6 +97,17 @@ async fn action_log_middleware(
     tokio::spawn(async move {
         log.push(entry_clone.clone());
         action_log::append_to_file(&entry_clone).await;
+    });
+
+    // Broadcast to WebSocket clients
+    state.broadcast_ws(ws::WsEvent::ActionLogEntry {
+        id: entry.id.clone(),
+        ts: entry.ts,
+        profile_id: entry.profile_id.clone(),
+        tool: entry.tool.clone(),
+        duration_ms: entry.duration_ms,
+        success: entry.success,
+        error: entry.error.clone(),
     });
 
     response
@@ -214,6 +226,8 @@ pub fn router(state: ApiState) -> Router {
         // Cookie export/import
         .route("/api/browser/:id/cookies/export", get(browser_export_cookies))
         .route("/api/browser/:id/cookies/import", post(browser_import_cookies))
+        // WebSocket (real-time events)
+        .route("/api/ws", axum::routing::get(ws::ws_handler))
         // Utility
         .route("/api/health", get(health))
         .with_state(state)
@@ -409,6 +423,10 @@ async fn launch_profile(
         }
     });
     state.emit("browser-status-changed");
+    state.broadcast_ws(ws::WsEvent::BrowserStatusChanged {
+        profile_id: profile_id.clone(),
+        running: true,
+    });
     Ok(Json(LaunchResponse { pid, cdp_port }))
 }
 
@@ -430,6 +448,10 @@ async fn kill_profile(
         }
     });
     state.emit("browser-status-changed");
+    state.broadcast_ws(ws::WsEvent::BrowserStatusChanged {
+        profile_id: profile_id.clone(),
+        running: false,
+    });
     Ok(StatusCode::NO_CONTENT)
 }
 

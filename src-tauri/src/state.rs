@@ -1,5 +1,6 @@
 use crate::agent::SessionManager;
 use crate::api::action_log::ActionLog;
+use crate::api::ws::WsBroadcaster;
 use crate::config::AppConfig;
 use crate::process::ProcessManager;
 use parking_lot::{Mutex, RwLock};
@@ -18,6 +19,8 @@ pub struct AppState {
     pub app_handle: Arc<Mutex<Option<AppHandle>>>,
     /// In-memory action log (last 2000 API calls).
     pub action_log: Arc<ActionLog>,
+    /// WebSocket broadcaster for real-time events.
+    pub ws_broadcaster: WsBroadcaster,
 }
 
 impl AppState {
@@ -30,6 +33,7 @@ impl AppState {
             api_server_abort: Arc::new(std::sync::Mutex::new(None)),
             app_handle: Arc::new(Mutex::new(None)),
             action_log: Arc::new(ActionLog::new()),
+            ws_broadcaster: WsBroadcaster::new(),
         }
     }
 
@@ -38,5 +42,10 @@ impl AppState {
         if let Some(handle) = &*self.app_handle.lock() {
             let _ = handle.emit(event, ());
         }
+    }
+
+    /// Broadcast a WebSocket event to all connected clients.
+    pub fn broadcast_ws(&self, event: crate::api::ws::WsEvent) {
+        self.ws_broadcaster.broadcast(event);
     }
 }
