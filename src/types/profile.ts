@@ -237,3 +237,11 @@ export interface Recording {
   created_at: number;
   duration_ms: number;
 }
+
+export interface RecordingSessionInfo {
+  id: string;
+  profile_id: string;
+  started_at: number;
+  action_count: number;
+  is_recording: boolean;
+}

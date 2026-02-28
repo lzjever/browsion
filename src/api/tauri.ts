@@ -1,5 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
-import type { BrowserProfile, AppSettings, RunningStatus, McpConfig, McpToolInfo, ProxyPreset, SnapshotInfo, Workflow, WorkflowExecution, StepTypeInfo, Recording } from '../types/profile';
+import type { BrowserProfile, AppSettings, RunningStatus, McpConfig, McpToolInfo, ProxyPreset, SnapshotInfo, Workflow, WorkflowExecution, StepTypeInfo, Recording, RecordingSessionInfo } from '../types/profile';
 import type { BrowserSource, CftVersionInfo } from '../types/profile';
 
 export const tauriApi = {
@@ -202,5 +202,26 @@ export const tauriApi = {
 
   async recordingToWorkflow(recordingId: string, workflowName: string): Promise<Workflow> {
     return invoke('recording_to_workflow', { recordingId, workflowName });
+  },
+
+  // Real-time recording
+  async startRecording(profileId: string): Promise<string> {
+    return invoke('start_recording', { profileId });
+  },
+
+  async stopRecording(profileId: string, name: string, description: string): Promise<Recording> {
+    return invoke('stop_recording', { profileId, name, description });
+  },
+
+  async getActiveRecordingSessions(): Promise<Record<string, string>> {
+    return invoke('get_active_recording_sessions');
+  },
+
+  async isRecording(profileId: string): Promise<boolean> {
+    return invoke('is_recording', { profileId });
+  },
+
+  async getRecordingSessionInfo(profileId: string): Promise<RecordingSessionInfo | null> {
+    return invoke('get_recording_session_info', { profileId });
   },
 };

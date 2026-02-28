@@ -183,6 +183,11 @@ pub fn run() {
             commands::recording::save_recording,
             commands::recording::delete_recording,
             commands::recording::recording_to_workflow,
+            commands::recording::start_recording,
+            commands::recording::stop_recording,
+            commands::recording::get_active_recording_sessions,
+            commands::recording::is_recording,
+            commands::recording::get_recording_session_info,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

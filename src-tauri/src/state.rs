@@ -3,7 +3,7 @@ use crate::api::action_log::ActionLog;
 use crate::api::ws::WsBroadcaster;
 use crate::config::AppConfig;
 use crate::process::ProcessManager;
-use crate::recording::RecordingManager;
+use crate::recording::{RecordingManager, RecordingSessionManager};
 use crate::workflow::WorkflowManager;
 use parking_lot::{Mutex, RwLock};
 use std::sync::Arc;
@@ -27,6 +27,8 @@ pub struct AppState {
     pub workflow_manager: Arc<WorkflowManager>,
     /// Recording manager for browser action recordings.
     pub recording_manager: Arc<RecordingManager>,
+    /// Active recording session manager.
+    pub recording_session_manager: Arc<RecordingSessionManager>,
 }
 
 impl AppState {
@@ -42,6 +44,7 @@ impl AppState {
             ws_broadcaster: WsBroadcaster::new(),
             workflow_manager: Arc::new(WorkflowManager::new().unwrap_or_default()),
             recording_manager: Arc::new(RecordingManager::new().unwrap_or_default()),
+            recording_session_manager: Arc::new(RecordingSessionManager::new()),
         }
     }
 

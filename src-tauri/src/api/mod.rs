@@ -85,8 +85,8 @@ async fn action_log_middleware(
     let entry = action_log::ActionEntry {
         id: uuid::Uuid::new_v4().to_string(),
         ts,
-        profile_id,
-        tool,
+        profile_id: profile_id.clone(),
+        tool: tool.clone(),
         duration_ms,
         success,
         error,
@@ -110,6 +110,18 @@ async fn action_log_middleware(
         error: entry.error.clone(),
     });
 
+    // Record to active recording session if exists
+    if success && !profile_id.is_empty() {
+        if let Some(action_type) = tool_to_recorded_action(&tool) {
+            // Extract params from request if possible (simplified approach)
+            let params = serde_json::json!({});
+
+            // Note: In a real implementation, we'd want to capture the request body
+            // For now, we record minimal info
+            let _ = state.recording_session_manager.add_action(&profile_id, action_type, params);
+        }
+    }
+
     response
 }
 
@@ -131,6 +143,35 @@ fn parse_path_for_log(path: &str) -> (String, String) {
     }
     // fallback
     (String::new(), parts[1..].join("/"))
+}
+
+/// Convert API tool string to RecordedActionType for recording.
+fn tool_to_recorded_action(tool: &str) -> Option<crate::recording::RecordedActionType> {
+    match tool {
+        "navigate" | "navigate_wait" => Some(crate::recording::RecordedActionType::Navigate),
+        "go_back" => Some(crate::recording::RecordedActionType::GoBack),
+        "go_forward" => Some(crate::recording::RecordedActionType::GoForward),
+        "reload" => Some(crate::recording::RecordedActionType::Reload),
+        "click" => Some(crate::recording::RecordedActionType::Click),
+        "hover" => Some(crate::recording::RecordedActionType::Hover),
+        "double_click" => Some(crate::recording::RecordedActionType::DoubleClick),
+        "right_click" => Some(crate::recording::RecordedActionType::RightClick),
+        "type" => Some(crate::recording::RecordedActionType::Type),
+        "slow_type" => Some(crate::recording::RecordedActionType::SlowType),
+        "press_key" => Some(crate::recording::RecordedActionType::PressKey),
+        "select_option" => Some(crate::recording::RecordedActionType::SelectOption),
+        "upload_file" => Some(crate::recording::RecordedActionType::UploadFile),
+        "scroll" => Some(crate::recording::RecordedActionType::Scroll),
+        "scroll_into_view" => Some(crate::recording::RecordedActionType::ScrollIntoView),
+        "new_tab" => Some(crate::recording::RecordedActionType::NewTab),
+        "switch_tab" => Some(crate::recording::RecordedActionType::SwitchTab),
+        "close_tab" => Some(crate::recording::RecordedActionType::CloseTab),
+        "wait_for" => Some(crate::recording::RecordedActionType::WaitForElement),
+        "screenshot" => Some(crate::recording::RecordedActionType::Screenshot),
+        "console_logs" => Some(crate::recording::RecordedActionType::GetConsoleLogs),
+        "extract" => Some(crate::recording::RecordedActionType::Extract),
+        _ => None, // Skip actions not relevant for recording
+    }
 }
 
 // ---------------------------------------------------------------------------

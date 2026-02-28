@@ -2,6 +2,40 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.9.0] - 2026-03-01
+
+### Added
+
+#### Real-Time Recording UI
+- **Live Recording Controls** — start/stop recording directly from profile list
+- **Recording Session Manager** — tracks active recording sessions per profile
+- **Recording Status Indicator** — shows recording state with action count
+- **Recording Save Dialog** — name and describe recordings before saving
+- **WebSocket Integration** — real-time recording status updates via `recording-status-changed` event
+
+#### Backend Implementation
+- `recording/session.rs` — RecordingSessionManager for active session tracking
+- `recording/schema.rs` — RecordingSessionInfo struct with Serialize support
+- **5 New Tauri Commands**:
+  - `start_recording(profile_id)` — start a recording session
+  - `stop_recording(profile_id, name, description)` — stop and save
+  - `get_active_recording_sessions()` — list all active sessions
+  - `is_recording(profile_id)` — check recording status
+  - `get_recording_session_info(profile_id)` — get session details
+- **Action Log Integration** — actions automatically recorded to active sessions
+- `AppState.recording_session_manager` field
+
+#### Frontend Components
+- **ProfileItem Recording Button** — 🔴 Start/⏹ Stop toggle with action count
+- **RecordingSaveDialog** — modal for naming recordings with session info
+- **Real-time Status** — animated recording indicator in profile status bar
+- **TypeScript Types** — RecordingSessionInfo interface added
+
+### Technical
+- Fixed RecordingSessionInfo serialization by moving to schema.rs with proper serde imports
+- Recording state synchronization via Tauri events
+- Action count display updates in real-time
+
 ## [0.8.0] - 2026-02-28
 
 ### Added

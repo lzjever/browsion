@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import { ProfileItem } from './ProfileItem';
 import { tauriApi } from '../api/tauri';
-import type { BrowserProfile, RunningStatus } from '../types/profile';
+import type { BrowserProfile, RunningStatus, RecordingSessionInfo } from '../types/profile';
 import { useToast } from './Toast';
 import { ConfirmDialog } from './ConfirmDialog';
 import { SnapshotModal } from './SnapshotModal';
@@ -13,14 +13,21 @@ interface ProfileListProps {
   refreshTrigger: number;
 }
 
+interface RecordingDialogState {
+  profile: BrowserProfile | null;
+  sessionInfo: RecordingSessionInfo | null;
+}
+
 export const ProfileList: React.FC<ProfileListProps> = ({ onEditProfile, onCloneProfile, refreshTrigger }) => {
   const [profiles, setProfiles] = useState<BrowserProfile[]>([]);
   const [runningStatus, setRunningStatus] = useState<RunningStatus>({});
+  const [recordingSessions, setRecordingSessions] = useState<Record<string, RecordingSessionInfo>>({});
   const [loading, setLoading] = useState(true);
   const [launchingId, setLaunchingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [tagFilter, setTagFilter] = useState('');
   const [snapshotProfile, setSnapshotProfile] = useState<BrowserProfile | null>(null);
+  const [recordingDialog, setRecordingDialog] = useState<RecordingDialogState | null>(null);
 
   const { showToast } = useToast();
   const [confirmState, setConfirmState] = useState<{
@@ -64,6 +71,14 @@ export const ProfileList: React.FC<ProfileListProps> = ({ onEditProfile, onClone
       }
     });
 
+    const unlistenRecording = listen('recording-status-changed', async () => {
+      try {
+        await loadRecordingSessions();
+      } catch (err) {
+        console.error('Failed to refresh recording status:', err);
+      }
+    });
+
     // Polling as fallback for process crashes not yet detected by cleanup task
     const interval = setInterval(async () => {
       try {
@@ -77,8 +92,29 @@ export const ProfileList: React.FC<ProfileListProps> = ({ onEditProfile, onClone
     return () => {
       unlistenProfiles.then((f) => f());
       unlistenStatus.then((f) => f());
+      unlistenRecording.then((f) => f());
       clearInterval(interval);
     };
+  }, []);
+
+  const loadRecordingSessions = async () => {
+    try {
+      const activeSessions = await tauriApi.getActiveRecordingSessions();
+      const sessions: Record<string, RecordingSessionInfo> = {};
+      for (const [profileId, _sessionId] of Object.entries(activeSessions)) {
+        const info = await tauriApi.getRecordingSessionInfo(profileId);
+        if (info) {
+          sessions[profileId] = info;
+        }
+      }
+      setRecordingSessions(sessions);
+    } catch (err) {
+      console.error('Failed to load recording sessions:', err);
+    }
+  };
+
+  useEffect(() => {
+    loadRecordingSessions();
   }, []);
 
   useEffect(() => {
@@ -146,6 +182,37 @@ export const ProfileList: React.FC<ProfileListProps> = ({ onEditProfile, onClone
     });
   };
 
+  const handleRecordToggle = async (profile: BrowserProfile) => {
+    const isRecording = !!recordingSessions[profile.id];
+    if (isRecording) {
+      // Show dialog to name the recording before stopping
+      const sessionInfo = recordingSessions[profile.id];
+      setRecordingDialog({ profile, sessionInfo });
+    } else {
+      // Start recording
+      try {
+        await tauriApi.startRecording(profile.id);
+        await loadRecordingSessions();
+        showToast('Recording started', 'success');
+      } catch (err) {
+        showToast(`Failed to start recording: ${err}`, 'error');
+      }
+    }
+  };
+
+  const handleStopRecording = async (name: string, description: string) => {
+    if (!recordingDialog?.profile) return;
+
+    try {
+      await tauriApi.stopRecording(recordingDialog.profile.id, name, description);
+      await loadRecordingSessions();
+      setRecordingDialog(null);
+      showToast('Recording saved', 'success');
+    } catch (err) {
+      showToast(`Failed to stop recording: ${err}`, 'error');
+    }
+  };
+
   if (loading) {
     return <div className="loading">Loading profiles...</div>;
   }
@@ -195,6 +262,8 @@ export const ProfileList: React.FC<ProfileListProps> = ({ onEditProfile, onClone
               profile={profile}
               isRunning={runningStatus[profile.id] || false}
               isLaunching={launchingId === profile.id}
+              isRecording={!!recordingSessions[profile.id]}
+              recordingSession={recordingSessions[profile.id] || null}
               onLaunch={handleLaunch}
               onActivate={handleActivate}
               onKill={handleKill}
@@ -202,6 +271,7 @@ export const ProfileList: React.FC<ProfileListProps> = ({ onEditProfile, onClone
               onClone={onCloneProfile}
               onDelete={handleDelete}
               onSnapshots={setSnapshotProfile}
+              onRecordToggle={handleRecordToggle}
             />
           ))
         )}
@@ -222,6 +292,93 @@ export const ProfileList: React.FC<ProfileListProps> = ({ onEditProfile, onClone
           onClose={() => setSnapshotProfile(null)}
         />
       )}
+      {recordingDialog && (
+        <RecordingSaveDialog
+          profile={recordingDialog.profile}
+          sessionInfo={recordingDialog.sessionInfo}
+          onSave={handleStopRecording}
+          onCancel={() => setRecordingDialog(null)}
+        />
+      )}
     </>
+  );
+};
+
+// Recording save dialog component
+interface RecordingSaveDialogProps {
+  profile: BrowserProfile | null;
+  sessionInfo: RecordingSessionInfo | null;
+  onSave: (name: string, description: string) => void;
+  onCancel: () => void;
+}
+
+const RecordingSaveDialog: React.FC<RecordingSaveDialogProps> = ({
+  profile,
+  sessionInfo,
+  onSave,
+  onCancel,
+}) => {
+  const [name, setName] = useState(`Recording ${profile?.name || 'Browser'} ${new Date().toLocaleTimeString()}`);
+  const [description, setDescription] = useState('');
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (name.trim()) {
+      onSave(name.trim(), description.trim());
+    }
+  };
+
+  return (
+    <div className="modal-overlay" onClick={onCancel}>
+      <div className="modal" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-header">
+          <h2>Save Recording</h2>
+          <button className="modal-close" onClick={onCancel}>
+            ×
+          </button>
+        </div>
+        <form onSubmit={handleSubmit}>
+          <div className="modal-body">
+            <div className="form-group">
+              <label htmlFor="recording-name">Name</label>
+              <input
+                id="recording-name"
+                type="text"
+                className="form-control"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                required
+                autoFocus
+              />
+            </div>
+            <div className="form-group">
+              <label htmlFor="recording-description">Description</label>
+              <textarea
+                id="recording-description"
+                className="form-control"
+                rows={3}
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                placeholder="What does this recording do?"
+              />
+            </div>
+            {sessionInfo && (
+              <div className="recording-summary">
+                <p>Actions recorded: <strong>{sessionInfo.action_count}</strong></p>
+                <p>Duration: <strong>{Math.floor((Date.now() - sessionInfo.started_at) / 1000)}s</strong></p>
+              </div>
+            )}
+          </div>
+          <div className="modal-footer">
+            <button type="button" className="btn btn-secondary" onClick={onCancel}>
+              Cancel
+            </button>
+            <button type="submit" className="btn btn-primary">
+              Save Recording
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
   );
 };

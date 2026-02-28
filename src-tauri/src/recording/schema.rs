@@ -80,6 +80,16 @@ pub enum RecordedActionType {
     Extract,
 }
 
+/// Public session info for API responses.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RecordingSessionInfo {
+    pub id: String,
+    pub profile_id: String,
+    pub started_at: u64,
+    pub action_count: usize,
+    pub is_recording: bool,
+}
+
 /// An active recording session.
 #[derive(Debug, Clone)]
 pub struct RecordingSession {

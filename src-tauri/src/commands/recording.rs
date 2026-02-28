@@ -1,6 +1,6 @@
 //! Tauri commands for recording management.
 
-use crate::recording::{Recording, RecordingManager};
+use crate::recording::{Recording, RecordingManager, RecordingSessionManager, RecordingSessionInfo};
 use crate::state::AppState;
 use crate::workflow::{Workflow, WorkflowStep};
 use std::collections::HashMap;
@@ -90,4 +90,76 @@ pub async fn recording_to_workflow(
     };
 
     Ok(workflow)
+}
+
+/// Real-time recording commands
+
+/// Start recording for a profile.
+#[tauri::command]
+pub async fn start_recording(
+    profile_id: String,
+    state: tauri::State<'_, Arc<AppState>>,
+) -> Result<String, String> {
+    let session_id = state
+        .recording_session_manager
+        .start_session(profile_id.clone())?;
+
+    // Emit event for UI update
+    state.emit("recording-status-changed");
+
+    Ok(session_id)
+}
+
+/// Stop recording for a profile.
+#[tauri::command]
+pub async fn stop_recording(
+    profile_id: String,
+    name: String,
+    description: String,
+    state: tauri::State<'_, Arc<AppState>>,
+) -> Result<Recording, String> {
+    let mut recording = state
+        .recording_session_manager
+        .stop_session(&profile_id)?;
+
+    // Update metadata
+    recording.name = name;
+    recording.description = description;
+
+    // Save recording
+    state
+        .recording_manager
+        .save(recording.clone())
+        .map_err(|e| e.to_string())?;
+
+    // Emit event for UI update
+    state.emit("recording-status-changed");
+
+    Ok(recording)
+}
+
+/// Get active recording sessions.
+#[tauri::command]
+pub async fn get_active_recording_sessions(
+    state: tauri::State<'_, Arc<AppState>>,
+) -> Result<HashMap<String, String>, String> {
+    Ok(state.recording_session_manager.get_active_sessions())
+}
+
+/// Check if a profile is currently being recorded.
+#[tauri::command]
+pub async fn is_recording(
+    profile_id: String,
+    state: tauri::State<'_, Arc<AppState>>,
+) -> Result<bool, String> {
+    Ok(state.recording_session_manager.is_recording(&profile_id))
+}
+
+/// Get session info for a profile.
+#[tauri::command]
+pub async fn get_recording_session_info(
+    profile_id: String,
+    state: tauri::State<'_, Arc<AppState>>,
+) -> Result<Option<crate::recording::RecordingSessionInfo>, String> {
+    Ok(state.recording_session_manager.get_session_info(&profile_id))
 }
