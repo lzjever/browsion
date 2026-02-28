@@ -5,6 +5,7 @@ import { tauriApi } from '../api/tauri';
 import type { BrowserProfile, RunningStatus } from '../types/profile';
 import { useToast } from './Toast';
 import { ConfirmDialog } from './ConfirmDialog';
+import { SnapshotModal } from './SnapshotModal';
 
 interface ProfileListProps {
   onEditProfile: (profile: BrowserProfile) => void;
@@ -19,6 +20,7 @@ export const ProfileList: React.FC<ProfileListProps> = ({ onEditProfile, onClone
   const [launchingId, setLaunchingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [tagFilter, setTagFilter] = useState('');
+  const [snapshotProfile, setSnapshotProfile] = useState<BrowserProfile | null>(null);
 
   const { showToast } = useToast();
   const [confirmState, setConfirmState] = useState<{
@@ -199,6 +201,7 @@ export const ProfileList: React.FC<ProfileListProps> = ({ onEditProfile, onClone
               onEdit={onEditProfile}
               onClone={onCloneProfile}
               onDelete={handleDelete}
+              onSnapshots={setSnapshotProfile}
             />
           ))
         )}
@@ -210,6 +213,13 @@ export const ProfileList: React.FC<ProfileListProps> = ({ onEditProfile, onClone
           confirmClassName={confirmState.confirmClassName}
           onConfirm={confirmState.onConfirm}
           onCancel={() => setConfirmState(null)}
+        />
+      )}
+      {snapshotProfile && (
+        <SnapshotModal
+          profileId={snapshotProfile.id}
+          profileName={snapshotProfile.name}
+          onClose={() => setSnapshotProfile(null)}
         />
       )}
     </>

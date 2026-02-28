@@ -2,6 +2,54 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.0] - 2026-02-28
+
+### Added
+
+#### Activity Monitor (F2)
+- New **Monitor** top-level tab with live observability dashboard
+- Per-profile cards showing JPEG thumbnails (polled every 3s), current page URL and title, top-5 recent actions with duration and success/fail badge
+- Full **Action Log** table with profile filter dropdown and full-text search (by tool name or profile)
+- Pause/Resume toggle — also pauses automatically when the browser tab is hidden
+
+#### Action Log (F1)
+- In-memory ring buffer (max 2 000 entries) recording every HTTP API call: timestamp, profile, tool, duration, success/error
+- Automatic append to daily JSONL files at `~/.browsion/logs/YYYY-MM-DD.jsonl`
+- Tower middleware wired into HTTP API — zero-touch, logs every route transparently
+- HTTP routes: `GET /api/action_log?profile_id=&limit=100`, `DELETE /api/action_log?profile_id=`
+
+#### Session Reconnect (F3)
+- Running Chrome sessions persisted to `~/.browsion/running_sessions.json` (pid + CDP port per profile)
+- On Tauri restart, each saved session is probed (`/json/version`) — live sessions are reconnected without restarting Chrome, dead entries are purged
+- `ProcessManager.register_external()` — reattach to an already-running Chrome process
+
+#### Proxy Presets (F6)
+- Named proxy presets stored in app config (`ProxyPreset { id, name, url }`)
+- New **Proxy Presets** section in Settings: add, delete, and test latency (GET `https://example.com`, 10 s timeout)
+- Profile Form proxy field now shows a preset dropdown above the manual text input — choose a preset or type a custom URL
+- Tauri commands: `get_proxy_presets`, `add_proxy_preset`, `update_proxy_preset`, `delete_proxy_preset`, `test_proxy`
+
+#### Profile Snapshots (F4)
+- Full profile data directory backup/restore at `~/.browsion/snapshots/<profile_id>/<name>/`
+- Snapshot manifest (`manifest.json`) tracks name, creation timestamp, and total byte size
+- **Snapshots** button on each profile card opens a modal: create, restore, and delete snapshots
+- Browser must be stopped to create or restore a snapshot (returns error if running)
+- HTTP endpoints: `GET/POST /api/profiles/:id/snapshots`, `POST .../snapshots/:name/restore`, `DELETE .../snapshots/:name`
+- MCP tools: `list_profile_snapshots`, `create_profile_snapshot`, `restore_profile_snapshot`
+- Tauri commands: `list_snapshots`, `create_snapshot`, `restore_snapshot`, `delete_snapshot`
+
+#### Cookie Import / Export (F5)
+- Export all cookies for a running browser as **JSON** or **Netscape** (`.txt`) format — downloaded directly via browser save dialog
+- Import cookies from JSON or Netscape file — uploaded via file picker, imported in bulk
+- `set_cookie_full` CDP helper preserves `secure`, `httpOnly`, and `expires` on import (existing `set_cookie` omitted these)
+- HTTP routes: `GET /api/browser/:id/cookies/export?format=json|netscape`, `POST /api/browser/:id/cookies/import`
+- MCP tools: `export_cookies`, `import_cookies`
+- Cookie export/import buttons on each Monitor card for quick in-session management
+
+### Changed
+- `AppConfig` now includes `proxy_presets` field (backward-compatible default: empty list)
+- Monitor page polling skips silently when no browsers are running or when tab is hidden
+
 ## [0.4.0] - 2026-02-28
 
 ### Added

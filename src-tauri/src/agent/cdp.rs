@@ -2811,6 +2811,32 @@ impl CDPClient {
         }
     }
 
+    /// Set a cookie with all fields (secure, httpOnly, expires).
+    pub async fn set_cookie_full(&self, cookie: &CookieInfo) -> Result<(), String> {
+        let mut params = json!({
+            "name": cookie.name,
+            "value": cookie.value,
+            "domain": cookie.domain,
+            "path": cookie.path,
+            "secure": cookie.secure,
+            "httpOnly": cookie.http_only,
+        });
+        if cookie.expires > 0.0 {
+            params["expires"] = json!(cookie.expires);
+        }
+        let result = self.send_command("Network.setCookie", params).await?;
+        let success = result
+            .get("result")
+            .and_then(|r| r.get("success"))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        if success {
+            Ok(())
+        } else {
+            Err("Failed to set cookie (full)".to_string())
+        }
+    }
+
     /// Delete all cookies.
     pub async fn delete_cookies(&self) -> Result<(), String> {
         self.send_command("Network.clearBrowserCookies", json!({}))

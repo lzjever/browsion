@@ -1,5 +1,9 @@
 pub mod mcp_tools;
+pub mod proxy;
+pub mod snapshots;
 pub use mcp_tools::{detect_mcp_tools, find_mcp_binary, write_browsion_to_tool};
+pub use proxy::{add_proxy_preset, delete_proxy_preset, get_proxy_presets, test_proxy, update_proxy_preset};
+pub use snapshots::{create_snapshot, delete_snapshot, list_snapshots, restore_snapshot};
 
 use crate::config::schema::BrowserSource;
 use crate::config::{validation, BrowserProfile};

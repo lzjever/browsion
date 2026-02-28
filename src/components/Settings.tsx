@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import { tauriApi } from '../api/tauri';
-import type { AppSettings, BrowserSource, CftVersionInfo } from '../types/profile';
+import type { AppSettings, BrowserSource, CftVersionInfo, ProxyPreset } from '../types/profile';
 import { open } from '@tauri-apps/plugin-dialog';
 
 type CftDownloadProgress =
@@ -37,8 +37,16 @@ export const Settings: React.FC = () => {
   const [success, setSuccess] = useState<string | null>(null);
   const successRef = React.useRef<HTMLDivElement>(null);
 
+  // Proxy presets
+  const [proxyPresets, setProxyPresets] = useState<ProxyPreset[]>([]);
+  const [newProxyName, setNewProxyName] = useState('');
+  const [newProxyUrl, setNewProxyUrl] = useState('');
+  const [testingProxy, setTestingProxy] = useState<string | null>(null);
+  const [proxyLatencies, setProxyLatencies] = useState<Record<string, number | 'error'>>({});
+
   useEffect(() => {
     loadSettings();
+    loadProxyPresets();
   }, []);
 
   useEffect(() => {
@@ -206,6 +214,50 @@ export const Settings: React.FC = () => {
     } finally {
       setDownloading(false);
       setDownloadProgress(null);
+    }
+  };
+
+  const loadProxyPresets = async () => {
+    try {
+      const presets = await tauriApi.getProxyPresets();
+      setProxyPresets(presets);
+    } catch {
+      // non-fatal
+    }
+  };
+
+  const handleAddProxy = async () => {
+    const name = newProxyName.trim();
+    const url = newProxyUrl.trim();
+    if (!name || !url) return;
+    try {
+      await tauriApi.addProxyPreset(name, url);
+      setNewProxyName('');
+      setNewProxyUrl('');
+      await loadProxyPresets();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const handleDeleteProxy = async (id: string) => {
+    try {
+      await tauriApi.deleteProxyPreset(id);
+      await loadProxyPresets();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const handleTestProxy = async (preset: ProxyPreset) => {
+    setTestingProxy(preset.id);
+    try {
+      const ms = await tauriApi.testProxy(preset.url);
+      setProxyLatencies((prev) => ({ ...prev, [preset.id]: ms }));
+    } catch {
+      setProxyLatencies((prev) => ({ ...prev, [preset.id]: 'error' }));
+    } finally {
+      setTestingProxy(null);
     }
   };
 
@@ -431,6 +483,80 @@ export const Settings: React.FC = () => {
               />
               <span>Minimize to tray when closing window</span>
             </label>
+          </div>
+        </div>
+
+        <div className="settings-section">
+          <h3>Proxy Presets</h3>
+          <p className="settings-hint">Save proxy URLs for quick reuse in profiles.</p>
+
+          {proxyPresets.length > 0 && (
+            <table className="proxy-table">
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th>URL</th>
+                  <th>Latency</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {proxyPresets.map((p) => {
+                  const lat = proxyLatencies[p.id];
+                  return (
+                    <tr key={p.id}>
+                      <td>{p.name}</td>
+                      <td className="proxy-url">{p.url}</td>
+                      <td>
+                        {lat === undefined ? '' : lat === 'error' ? (
+                          <span className="proxy-latency-error">✕ fail</span>
+                        ) : (
+                          <span className={`proxy-latency ${lat < 500 ? 'fast' : lat < 1500 ? 'ok' : 'slow'}`}>{lat} ms</span>
+                        )}
+                      </td>
+                      <td>
+                        <button
+                          className="btn btn-secondary btn-sm"
+                          onClick={() => handleTestProxy(p)}
+                          disabled={testingProxy === p.id}
+                        >
+                          {testingProxy === p.id ? '…' : 'Test'}
+                        </button>
+                        <button
+                          className="btn btn-danger-outline btn-sm"
+                          onClick={() => handleDeleteProxy(p.id)}
+                        >
+                          Delete
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
+
+          <div className="proxy-add-row">
+            <input
+              type="text"
+              value={newProxyName}
+              onChange={(e) => setNewProxyName(e.target.value)}
+              placeholder="Name (e.g. Home)"
+            />
+            <input
+              type="text"
+              value={newProxyUrl}
+              onChange={(e) => setNewProxyUrl(e.target.value)}
+              placeholder="http://user:pass@host:port"
+              style={{ flex: 2 }}
+            />
+            <button
+              className="btn btn-primary"
+              onClick={handleAddProxy}
+              disabled={!newProxyName.trim() || !newProxyUrl.trim()}
+            >
+              Add
+            </button>
           </div>
         </div>
       </div>

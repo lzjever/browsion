@@ -59,6 +59,28 @@ export interface McpConfig {
 
 export type ToolScope = 'global' | 'project_scoped';
 
+export interface ProxyPreset {
+  id: string;
+  name: string;
+  url: string;
+}
+
+export interface SnapshotInfo {
+  name: string;
+  created_at_ts: number;
+  size_bytes: number;
+}
+
+export interface ActionEntry {
+  id: string;
+  ts: number;
+  profile_id: string;
+  tool: string;
+  duration_ms: number;
+  success: boolean;
+  error?: string;
+}
+
 export interface McpToolInfo {
   id: string;
   name: string;

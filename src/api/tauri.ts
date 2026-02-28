@@ -1,5 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
-import type { BrowserProfile, AppSettings, RunningStatus, McpConfig, McpToolInfo } from '../types/profile';
+import type { BrowserProfile, AppSettings, RunningStatus, McpConfig, McpToolInfo, ProxyPreset, SnapshotInfo } from '../types/profile';
 import type { BrowserSource, CftVersionInfo } from '../types/profile';
 
 export const tauriApi = {
@@ -110,5 +110,43 @@ export const tauriApi = {
 
   async findMcpBinary(): Promise<string | null> {
     return invoke('find_mcp_binary');
+  },
+
+  // Proxy presets
+  async getProxyPresets(): Promise<ProxyPreset[]> {
+    return invoke('get_proxy_presets');
+  },
+
+  async addProxyPreset(name: string, url: string): Promise<ProxyPreset> {
+    return invoke('add_proxy_preset', { name, url });
+  },
+
+  async updateProxyPreset(preset: ProxyPreset): Promise<void> {
+    return invoke('update_proxy_preset', { preset });
+  },
+
+  async deleteProxyPreset(id: string): Promise<void> {
+    return invoke('delete_proxy_preset', { id });
+  },
+
+  async testProxy(url: string): Promise<number> {
+    return invoke('test_proxy', { url });
+  },
+
+  // Snapshots
+  async listSnapshots(profileId: string): Promise<SnapshotInfo[]> {
+    return invoke('list_snapshots', { profileId });
+  },
+
+  async createSnapshot(profileId: string, name: string): Promise<SnapshotInfo> {
+    return invoke('create_snapshot', { profileId, name });
+  },
+
+  async restoreSnapshot(profileId: string, name: string): Promise<void> {
+    return invoke('restore_snapshot', { profileId, name });
+  },
+
+  async deleteSnapshot(profileId: string, name: string): Promise<void> {
+    return invoke('delete_snapshot', { profileId, name });
   },
 };

@@ -3,10 +3,11 @@ import { ProfileList } from './components/ProfileList';
 import { ProfileForm } from './components/ProfileForm';
 import { Settings } from './components/Settings';
 import { McpPage } from './components/McpPage';
+import { MonitorPage } from './components/MonitorPage';
 import type { BrowserProfile } from './types/profile';
 import './styles/index.css';
 
-type View = 'profiles' | 'settings' | 'mcp';
+type View = 'profiles' | 'settings' | 'mcp' | 'monitor';
 
 function App() {
   const [currentView, setCurrentView] = useState<View>('profiles');
@@ -69,6 +70,12 @@ function App() {
           >
             MCP
           </button>
+          <button
+            className={`nav-btn ${currentView === 'monitor' ? 'active' : ''}`}
+            onClick={() => setCurrentView('monitor')}
+          >
+            Monitor
+          </button>
         </nav>
       </header>
 
@@ -92,6 +99,8 @@ function App() {
         {currentView === 'settings' && <Settings />}
 
         {currentView === 'mcp' && <McpPage />}
+
+        {currentView === 'monitor' && <MonitorPage />}
       </main>
 
       {showProfileForm && (

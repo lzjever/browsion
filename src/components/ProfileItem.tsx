@@ -11,6 +11,7 @@ interface ProfileItemProps {
   onEdit: (profile: BrowserProfile) => void;
   onClone: (profile: BrowserProfile) => void;
   onDelete: (id: string) => void;
+  onSnapshots?: (profile: BrowserProfile) => void;
 }
 
 export const ProfileItem: React.FC<ProfileItemProps> = ({
@@ -23,6 +24,7 @@ export const ProfileItem: React.FC<ProfileItemProps> = ({
   onEdit,
   onClone,
   onDelete,
+  onSnapshots,
 }) => {
   return (
     <div className="profile-item">
@@ -91,6 +93,11 @@ export const ProfileItem: React.FC<ProfileItemProps> = ({
         <button className="btn btn-info" onClick={() => onClone(profile)}>
           Clone
         </button>
+        {onSnapshots && (
+          <button className="btn btn-secondary" onClick={() => onSnapshots(profile)}>
+            Snapshots
+          </button>
+        )}
         <button
           className="btn btn-danger-outline"
           onClick={() => onDelete(profile.id)}

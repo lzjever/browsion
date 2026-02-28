@@ -260,6 +260,33 @@ impl ProcessManager {
         let recent = self.recent_launches.lock();
         recent.clone()
     }
+
+    /// Register an externally-launched browser (e.g., one that survived a Tauri restart).
+    /// Does NOT spawn a new process — just tracks the existing PID + CDP port.
+    pub fn register_external(&self, profile_id: &str, pid: u32, cdp_port: u16) {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
+        let process_info = ProcessInfo {
+            profile_id: profile_id.to_string(),
+            pid,
+            launched_at: now,
+            cdp_port: Some(cdp_port),
+        };
+
+        self.active_processes
+            .lock()
+            .insert(profile_id.to_string(), process_info);
+
+        tracing::info!(
+            "Registered external session: profile={} pid={} cdp_port={}",
+            profile_id,
+            pid,
+            cdp_port
+        );
+    }
 }
 
 impl Default for ProcessManager {

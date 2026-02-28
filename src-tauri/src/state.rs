@@ -1,4 +1,5 @@
 use crate::agent::SessionManager;
+use crate::api::action_log::ActionLog;
 use crate::config::AppConfig;
 use crate::process::ProcessManager;
 use parking_lot::{Mutex, RwLock};
@@ -15,6 +16,8 @@ pub struct AppState {
     pub api_server_abort: Arc<std::sync::Mutex<Option<Box<dyn FnOnce() + Send>>>>,
     /// Tauri app handle for emitting events to the frontend.
     pub app_handle: Arc<Mutex<Option<AppHandle>>>,
+    /// In-memory action log (last 2000 API calls).
+    pub action_log: Arc<ActionLog>,
 }
 
 impl AppState {
@@ -26,6 +29,7 @@ impl AppState {
             session_manager: Arc::new(SessionManager::new()),
             api_server_abort: Arc::new(std::sync::Mutex::new(None)),
             app_handle: Arc::new(Mutex::new(None)),
+            action_log: Arc::new(ActionLog::new()),
         }
     }
 

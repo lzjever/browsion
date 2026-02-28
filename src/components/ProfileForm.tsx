@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { tauriApi } from '../api/tauri';
-import type { BrowserProfile, BrowserSource } from '../types/profile';
+import type { BrowserProfile, BrowserSource, ProxyPreset } from '../types/profile';
 import { v4 as uuidv4 } from 'uuid';
 import ISO6391 from 'iso-639-1';
 import { LaunchArgsSelector, ARG_CATEGORIES } from './LaunchArgsSelector';
@@ -108,6 +108,7 @@ export const ProfileForm: React.FC<ProfileFormProps> = ({
   const [browserSource, setBrowserSource] = useState<BrowserSource | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [proxyPresets, setProxyPresets] = useState<ProxyPreset[]>([]);
 
   const isFingerprintChromium =
     browserSource?.type === 'custom' && browserSource?.fingerprint_chromium;
@@ -133,7 +134,8 @@ export const ProfileForm: React.FC<ProfileFormProps> = ({
   };
 
   useEffect(() => {
-       tauriApi.getBrowserSource().then(setBrowserSource).catch(() => setBrowserSource(null));
+    tauriApi.getProxyPresets().then(setProxyPresets).catch(() => setProxyPresets([]));
+    tauriApi.getBrowserSource().then(setBrowserSource).catch(() => setBrowserSource(null));
   }, []);
 
   useEffect(() => {
@@ -350,6 +352,22 @@ export const ProfileForm: React.FC<ProfileFormProps> = ({
 
                 <div className="form-group">
                   <label htmlFor="proxy_server">Proxy Server</label>
+                  {proxyPresets.length > 0 && (
+                    <select
+                      className="proxy-preset-select"
+                      value=""
+                      onChange={(e) => {
+                        if (e.target.value) {
+                          setFormData((prev) => ({ ...prev, proxy_server: e.target.value }));
+                        }
+                      }}
+                    >
+                      <option value="">— Select preset —</option>
+                      {proxyPresets.map((p) => (
+                        <option key={p.id} value={p.url}>{p.name} ({p.url})</option>
+                      ))}
+                    </select>
+                  )}
                   <input
                     type="text"
                     id="proxy_server"

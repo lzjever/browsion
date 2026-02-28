@@ -53,6 +53,48 @@ pub fn run() {
                 }
             }
 
+            // Session reconnect: probe previously-running browsers from saved sessions
+            {
+                let state_rc = std::sync::Arc::clone(&state);
+                tauri::async_runtime::spawn(async move {
+                    match crate::process::sessions_persist::load_sessions().await {
+                        Ok(sessions) => {
+                            for (profile_id, entry) in sessions {
+                                // Probe CDP port to check if browser is still alive
+                                let url = format!("http://127.0.0.1:{}/json/version", entry.cdp_port);
+                                match reqwest::get(&url).await {
+                                    Ok(r) if r.status().is_success() => {
+                                        tracing::info!(
+                                            "Reconnected session: profile={} pid={} cdp_port={}",
+                                            profile_id,
+                                            entry.pid,
+                                            entry.cdp_port
+                                        );
+                                        state_rc.process_manager.register_external(
+                                            &profile_id,
+                                            entry.pid,
+                                            entry.cdp_port,
+                                        );
+                                    }
+                                    _ => {
+                                        tracing::info!(
+                                            "Session dead on restart, removing: profile={}",
+                                            profile_id
+                                        );
+                                        let _ = crate::process::sessions_persist::remove_session(
+                                            &profile_id,
+                                        )
+                                        .await;
+                                    }
+                                }
+                            }
+                            state_rc.emit("browser-status-changed");
+                        }
+                        Err(e) => tracing::warn!("Failed to load persisted sessions: {}", e),
+                    }
+                });
+            }
+
             // Manage state
             app.manage(state);
 
@@ -118,6 +160,15 @@ pub fn run() {
             commands::mcp_tools::detect_mcp_tools,
             commands::mcp_tools::write_browsion_to_tool,
             commands::mcp_tools::find_mcp_binary,
+            commands::proxy::get_proxy_presets,
+            commands::proxy::add_proxy_preset,
+            commands::proxy::update_proxy_preset,
+            commands::proxy::delete_proxy_preset,
+            commands::proxy::test_proxy,
+            commands::snapshots::list_snapshots,
+            commands::snapshots::create_snapshot,
+            commands::snapshots::restore_snapshot,
+            commands::snapshots::delete_snapshot,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

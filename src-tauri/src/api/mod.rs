@@ -1,12 +1,14 @@
 //! Local HTTP API for MCP and automation.
 //! Profile CRUD, browser launch/kill, and full CDP browser control.
 
+pub mod action_log;
+
 use crate::commands::get_effective_chrome_path_from_config;
 use crate::config::{validation, BrowserProfile};
 use crate::state::AppState;
 #[allow(unused_imports)]
 use axum::{
-    extract::{Path as AxumPath, State, Request},
+    extract::{Path as AxumPath, Query, State, Request},
     http::StatusCode,
     middleware::{self, Next},
     response::Response,
@@ -15,6 +17,7 @@ use axum::{
 };
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 pub type ApiState = Arc<AppState>;
 
@@ -36,6 +39,86 @@ async fn api_key_auth(
         Some(k) if k == expected_key => Ok(next.run(request).await),
         _ => Err(StatusCode::UNAUTHORIZED),
     }
+}
+
+/// Action log middleware — records every API call with timing and outcome.
+async fn action_log_middleware(
+    State(state): State<ApiState>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let path = request.uri().path().to_string();
+
+    // Skip health + action_log routes themselves to avoid noise
+    if path == "/api/health" || path.starts_with("/api/action_log") {
+        return next.run(request).await;
+    }
+
+    // Extract profile_id and tool from path patterns:
+    //   /api/browser/:id/<tool>     → profile_id = id, tool = tool_name
+    //   /api/launch/:profile_id     → profile_id, tool = "launch"
+    //   /api/kill/:profile_id       → profile_id, tool = "kill"
+    let (profile_id, tool) = parse_path_for_log(&path);
+
+    let t0 = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default();
+
+    let response = next.run(request).await;
+
+    let elapsed = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .saturating_sub(t0);
+    let duration_ms = elapsed.as_millis() as u64;
+    let ts = t0.as_millis() as u64;
+
+    let status = response.status();
+    let success = status.is_success() || status.is_redirection();
+    let error = if !success {
+        Some(format!("HTTP {}", status.as_u16()))
+    } else {
+        None
+    };
+
+    let entry = action_log::ActionEntry {
+        id: uuid::Uuid::new_v4().to_string(),
+        ts,
+        profile_id,
+        tool,
+        duration_ms,
+        success,
+        error,
+    };
+
+    let log = state.action_log.clone();
+    let entry_clone = entry.clone();
+    tokio::spawn(async move {
+        log.push(entry_clone.clone());
+        action_log::append_to_file(&entry_clone).await;
+    });
+
+    response
+}
+
+fn parse_path_for_log(path: &str) -> (String, String) {
+    let parts: Vec<&str> = path.trim_start_matches('/').split('/').collect();
+    // /api/browser/:id/<tool>
+    if parts.len() >= 4 && parts[0] == "api" && parts[1] == "browser" {
+        let profile_id = parts[2].to_string();
+        let tool = parts[3..].join("/");
+        return (profile_id, tool);
+    }
+    // /api/launch/:id or /api/kill/:id
+    if parts.len() >= 3 && parts[0] == "api" && (parts[1] == "launch" || parts[1] == "kill") {
+        return (parts[2].to_string(), parts[1].to_string());
+    }
+    // /api/profiles/:id (CRUD)
+    if parts.len() >= 3 && parts[0] == "api" && parts[1] == "profiles" {
+        return (String::new(), format!("profiles/{}", parts[2]));
+    }
+    // fallback
+    (String::new(), parts[1..].join("/"))
 }
 
 // ---------------------------------------------------------------------------
@@ -122,6 +205,15 @@ pub fn router(state: ApiState) -> Router {
         .route("/api/browser/:id/switch_frame", post(browser_switch_frame))
         .route("/api/browser/:id/main_frame", post(browser_main_frame))
         .route("/api/browser/:id/console/clear", post(browser_clear_console))
+        // Action log
+        .route("/api/action_log", get(get_action_log).delete(clear_action_log))
+        // Profile snapshots
+        .route("/api/profiles/:id/snapshots", get(list_snapshots).post(create_snapshot))
+        .route("/api/profiles/:id/snapshots/:name/restore", post(restore_snapshot))
+        .route("/api/profiles/:id/snapshots/:name", delete(delete_snapshot))
+        // Cookie export/import
+        .route("/api/browser/:id/cookies/export", get(browser_export_cookies))
+        .route("/api/browser/:id/cookies/import", post(browser_import_cookies))
         // Utility
         .route("/api/health", get(health))
         .with_state(state)
@@ -309,6 +401,13 @@ async fn launch_profile(
             tracing::warn!("Failed to save recent profiles after launch: {}", e);
         }
     }
+    // Persist session for reconnect across Tauri restarts
+    let pid_id = profile_id.clone();
+    tokio::spawn(async move {
+        if let Err(e) = crate::process::sessions_persist::save_session(&pid_id, pid, cdp_port).await {
+            tracing::warn!("Failed to persist session for {}: {}", pid_id, e);
+        }
+    });
     state.emit("browser-status-changed");
     Ok(Json(LaunchResponse { pid, cdp_port }))
 }
@@ -323,6 +422,13 @@ async fn kill_profile(
         .kill_profile(&profile_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    // Remove from persisted sessions
+    let kill_id = profile_id.clone();
+    tokio::spawn(async move {
+        if let Err(e) = crate::process::sessions_persist::remove_session(&kill_id).await {
+            tracing::warn!("Failed to remove persisted session for {}: {}", kill_id, e);
+        }
+    });
     state.emit("browser-status-changed");
     Ok(StatusCode::NO_CONTENT)
 }
@@ -1499,12 +1605,254 @@ async fn browser_clear_console(
 }
 
 // ---------------------------------------------------------------------------
+// Action Log endpoints
+// ---------------------------------------------------------------------------
+
+#[derive(serde::Deserialize)]
+struct ActionLogQuery {
+    profile_id: Option<String>,
+    #[serde(default = "default_log_limit")]
+    limit: usize,
+}
+
+fn default_log_limit() -> usize {
+    100
+}
+
+async fn get_action_log(
+    State(state): State<ApiState>,
+    Query(q): Query<ActionLogQuery>,
+) -> Json<Vec<action_log::ActionEntry>> {
+    let entries = state
+        .action_log
+        .get_filtered(q.profile_id.as_deref(), q.limit);
+    Json(entries)
+}
+
+async fn clear_action_log(
+    State(state): State<ApiState>,
+    Query(q): Query<ActionLogQuery>,
+) -> StatusCode {
+    state.action_log.clear(q.profile_id.as_deref());
+    StatusCode::NO_CONTENT
+}
+
+// ---------------------------------------------------------------------------
+// Snapshot endpoints
+// ---------------------------------------------------------------------------
+
+async fn list_snapshots(
+    State(state): State<ApiState>,
+    AxumPath(id): AxumPath<String>,
+) -> ApiResult<Json<Vec<crate::config::schema::SnapshotInfo>>> {
+    let config = state.config.read().clone();
+    let infos = crate::commands::snapshots::core_list_snapshots(&id, &config)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    Ok(Json(infos))
+}
+
+#[derive(serde::Deserialize)]
+struct CreateSnapshotReq {
+    name: String,
+}
+
+async fn create_snapshot(
+    State(state): State<ApiState>,
+    AxumPath(id): AxumPath<String>,
+    Json(req): Json<CreateSnapshotReq>,
+) -> ApiResult<Json<crate::config::schema::SnapshotInfo>> {
+    let config = state.config.read().clone();
+    let info = crate::commands::snapshots::core_create_snapshot(
+        &id,
+        &req.name,
+        &config,
+        &state.process_manager,
+    )
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    Ok(Json(info))
+}
+
+async fn restore_snapshot(
+    State(state): State<ApiState>,
+    AxumPath((id, name)): AxumPath<(String, String)>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let config = state.config.read().clone();
+    crate::commands::snapshots::core_restore_snapshot(
+        &id,
+        &name,
+        &config,
+        &state.process_manager,
+        &state.session_manager,
+    )
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+async fn delete_snapshot(
+    State(_state): State<ApiState>,
+    AxumPath((id, name)): AxumPath<(String, String)>,
+) -> ApiResult<StatusCode> {
+    crate::commands::snapshots::core_delete_snapshot(&id, &name)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+// ---------------------------------------------------------------------------
+// Cookie export / import
+// ---------------------------------------------------------------------------
+
+#[derive(serde::Deserialize)]
+struct CookieExportQuery {
+    #[serde(default = "default_json_format")]
+    format: String,
+}
+fn default_json_format() -> String {
+    "json".to_string()
+}
+
+async fn browser_export_cookies(
+    State(state): State<ApiState>,
+    AxumPath(id): AxumPath<String>,
+    Query(q): Query<CookieExportQuery>,
+) -> Result<axum::response::Response, (StatusCode, String)> {
+    use axum::response::IntoResponse;
+
+    let cdp_port = require_cdp_port(&state, &id)?;
+    let handle = state
+        .session_manager
+        .get_client(&id, cdp_port)
+        .await
+        .map_err(cdp_err)?;
+    let client = handle.lock().await;
+    let cookies = client.get_cookies().await.map_err(cdp_err)?;
+
+    if q.format == "netscape" {
+        let body = export_cookies_netscape(&cookies);
+        Ok((
+            [
+                (axum::http::header::CONTENT_TYPE, "text/plain"),
+                (
+                    axum::http::header::CONTENT_DISPOSITION,
+                    "attachment; filename=\"cookies.txt\"",
+                ),
+            ],
+            body,
+        )
+            .into_response())
+    } else {
+        let json = serde_json::to_string_pretty(&cookies)
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        Ok((
+            [
+                (axum::http::header::CONTENT_TYPE, "application/json"),
+                (
+                    axum::http::header::CONTENT_DISPOSITION,
+                    "attachment; filename=\"cookies.json\"",
+                ),
+            ],
+            json,
+        )
+            .into_response())
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct CookieImportReq {
+    format: String,
+    data: String,
+}
+
+async fn browser_import_cookies(
+    State(state): State<ApiState>,
+    AxumPath(id): AxumPath<String>,
+    Json(req): Json<CookieImportReq>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let cdp_port = require_cdp_port(&state, &id)?;
+    let handle = state
+        .session_manager
+        .get_client(&id, cdp_port)
+        .await
+        .map_err(cdp_err)?;
+    let client = handle.lock().await;
+
+    let cookies: Vec<crate::agent::types::CookieInfo> = if req.format == "netscape" {
+        parse_cookies_netscape(&req.data)
+    } else {
+        serde_json::from_str(&req.data)
+            .map_err(|e| (StatusCode::BAD_REQUEST, format!("Invalid JSON: {}", e)))?
+    };
+
+    let mut imported = 0usize;
+    let mut errors: Vec<String> = Vec::new();
+    for cookie in &cookies {
+        match client.set_cookie_full(cookie).await {
+            Ok(()) => imported += 1,
+            Err(e) => errors.push(e),
+        }
+    }
+
+    Ok(Json(serde_json::json!({
+        "imported": imported,
+        "errors": errors,
+    })))
+}
+
+fn export_cookies_netscape(cookies: &[crate::agent::types::CookieInfo]) -> String {
+    let mut out = String::from("# Netscape HTTP Cookie File\n");
+    for c in cookies {
+        let flag = if c.domain.starts_with('.') { "TRUE" } else { "FALSE" };
+        let secure = if c.secure { "TRUE" } else { "FALSE" };
+        let expires = c.expires as u64;
+        out.push_str(&format!(
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+            c.domain, flag, c.path, secure, expires, c.name, c.value
+        ));
+    }
+    out
+}
+
+fn parse_cookies_netscape(data: &str) -> Vec<crate::agent::types::CookieInfo> {
+    let mut cookies = Vec::new();
+    for line in data.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let parts: Vec<&str> = line.split('\t').collect();
+        if parts.len() < 7 {
+            continue;
+        }
+        let domain = parts[0].to_string();
+        let path = parts[2].to_string();
+        let secure = parts[3].eq_ignore_ascii_case("TRUE");
+        let expires: f64 = parts[4].parse().unwrap_or(0.0);
+        let name = parts[5].to_string();
+        let value = parts[6].to_string();
+        cookies.push(crate::agent::types::CookieInfo {
+            name,
+            value,
+            domain,
+            path,
+            secure,
+            http_only: false,
+            expires,
+        });
+    }
+    cookies
+}
+
+// ---------------------------------------------------------------------------
 // Server
 // ---------------------------------------------------------------------------
 
 /// Build the full API app (router + optional API key auth + CORS).
 /// Used by run_server and by integration tests to exercise API key middleware.
 pub fn app(state: ApiState, api_key: Option<String>) -> Router {
+    let state_for_log = state.clone();
     let base_router = router(state);
     let app = if let Some(key) = api_key {
         base_router
@@ -1512,6 +1860,7 @@ pub fn app(state: ApiState, api_key: Option<String>) -> Router {
     } else {
         base_router
     }
+    .layer(middleware::from_fn_with_state(state_for_log, action_log_middleware))
     .layer(
         tower_http::cors::CorsLayer::new()
             .allow_origin(tower_http::cors::Any)

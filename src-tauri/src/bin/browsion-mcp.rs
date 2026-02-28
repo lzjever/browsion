@@ -584,6 +584,32 @@ struct SwitchFrameParam {
 // ---------------------------------------------------------------------------
 
 #[derive(Clone)]
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct SnapshotParam {
+    /// Profile ID
+    profile_id: String,
+    /// Snapshot name (no spaces, e.g. "before-login")
+    name: String,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct CookieExportParam {
+    /// Profile ID of the running browser
+    profile_id: String,
+    /// Format: "json" (default) or "netscape"
+    format: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct CookieImportParam {
+    /// Profile ID of the running browser
+    profile_id: String,
+    /// Format: "json" or "netscape"
+    format: String,
+    /// Cookie file contents as a string
+    data: String,
+}
+
 struct BrowsionMcpServer {
     client: Client,
     base: String,
@@ -1783,6 +1809,80 @@ impl BrowsionMcpServer {
             .api_post(
                 &format!("/api/browser/{}/console/clear", p.profile_id),
                 &json!({}),
+            )
+            .await?;
+        Self::text_result(body)
+    }
+
+    // ── Snapshots ─────────────────────────────────────────────────────────────
+
+    #[tool(description = "List all snapshots for a profile. Returns array of {name, created_at_ts, size_bytes}.")]
+    async fn list_profile_snapshots(
+        &self,
+        Parameters(p): Parameters<ProfileIdParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let body = self
+            .api_get(&format!("/api/profiles/{}/snapshots", p.profile_id))
+            .await?;
+        Self::text_result(body)
+    }
+
+    #[tool(description = "Create a snapshot of a profile's browser data. The browser must NOT be running. Provide a unique name (no spaces).")]
+    async fn create_profile_snapshot(
+        &self,
+        Parameters(p): Parameters<SnapshotParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let body = self
+            .api_post(
+                &format!("/api/profiles/{}/snapshots", p.profile_id),
+                &json!({ "name": p.name }),
+            )
+            .await?;
+        Self::text_result(body)
+    }
+
+    #[tool(description = "Restore a profile snapshot. The browser must NOT be running. Replaces current profile data with the snapshot.")]
+    async fn restore_profile_snapshot(
+        &self,
+        Parameters(p): Parameters<SnapshotParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let body = self
+            .api_post(
+                &format!(
+                    "/api/profiles/{}/snapshots/{}/restore",
+                    p.profile_id, p.name
+                ),
+                &json!({}),
+            )
+            .await?;
+        Self::text_result(body)
+    }
+
+    // ── Cookie export / import ────────────────────────────────────────────────
+
+    #[tool(description = "Export all cookies for a running browser profile. format: 'json' (default) or 'netscape'. Returns the cookies as a string.")]
+    async fn export_cookies(
+        &self,
+        Parameters(p): Parameters<CookieExportParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let fmt = p.format.as_deref().unwrap_or("json");
+        let url = format!(
+            "/api/browser/{}/cookies/export?format={}",
+            p.profile_id, fmt
+        );
+        let body = self.api_get(&url).await?;
+        Self::text_result(body)
+    }
+
+    #[tool(description = "Import cookies into a running browser profile. format: 'json' or 'netscape'. data: the cookie file contents as a string.")]
+    async fn import_cookies(
+        &self,
+        Parameters(p): Parameters<CookieImportParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let body = self
+            .api_post(
+                &format!("/api/browser/{}/cookies/import", p.profile_id),
+                &json!({ "format": p.format, "data": p.data }),
             )
             .await?;
         Self::text_result(body)

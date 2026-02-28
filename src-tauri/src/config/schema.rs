@@ -97,6 +97,10 @@ pub struct AppConfig {
     /// Legacy: migrated into mcp.api_port on load. Not serialized.
     #[serde(skip_serializing, default)]
     pub api_port: Option<u16>,
+
+    /// Proxy presets for reuse across profiles.
+    #[serde(default)]
+    pub proxy_presets: Vec<ProxyPreset>,
 }
 
 impl Default for AppConfig {
@@ -109,6 +113,7 @@ impl Default for AppConfig {
             recent_profiles: Vec::new(),
             mcp: McpConfig::default(),
             api_port: None,
+            proxy_presets: Vec::new(),
         }
     }
 }
@@ -220,6 +225,23 @@ pub struct ProcessInfo {
     /// CDP remote-debugging port (if browser was launched with --remote-debugging-port).
     #[serde(default)]
     pub cdp_port: Option<u16>,
+}
+
+/// Snapshot metadata (stored in manifest.json next to snapshot data).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SnapshotInfo {
+    pub name: String,
+    pub created_at_ts: u64, // Unix ms
+    pub size_bytes: u64,
+}
+
+/// A reusable proxy server preset.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProxyPreset {
+    pub id: String,
+    pub name: String,
+    /// Proxy URL, e.g. "http://user:pass@192.168.1.1:8080"
+    pub url: String,
 }
 
 fn default_lang() -> String {
