@@ -39,13 +39,14 @@ uuid = { version = "1", features = ["v4", "serde"] }
 
 # CDP and CfT
 futures = "0.3"
-reqwest = { version = "0.11", features = ["json", "stream"] }
-tokio-tungstenite = { version = "0.21", features = ["native-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
+tokio-tungstenite = { version = "0.21", features = ["rustls-tls-webpki-roots"] }
 zip = "0.6"
 
 # Local HTTP API for MCP / automation
-axum = { version = "0.7", features = ["json"] }
+axum = { version = "0.7", features = ["json", "ws"] }
 tower-http = { version = "0.5", features = ["cors"] }
+tower = { version = "0.5", features = ["limit"] }
 
 # MCP Server SDK (official)
 rmcp = { version = "0.16", features = ["server", "transport-io", "macros"] }
@@ -69,5 +70,5 @@ objc = "0.2"
 libc = "0.2"
 
 [dev-dependencies]
-tower = { version = "0.4", features = ["util"] }
+tower = { version = "0.5", features = ["util"] }
 base64 = "0.22"

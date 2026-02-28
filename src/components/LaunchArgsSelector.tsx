@@ -42,6 +42,7 @@ export const ARG_CATEGORIES: ArgCategory[] = [
     args: [
       { arg: '--headless', description: 'Run in headless mode (no visible window)' },
       { arg: '--disable-images', description: 'Disable image loading (faster automation)' },
+      { arg: '--disable-blink-features=AutomationControlled', description: 'Hide automation marker (removes navigator.webdriver)' },
     ],
   },
 ];
