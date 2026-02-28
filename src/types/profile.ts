@@ -88,3 +88,107 @@ export interface McpToolInfo {
   found: boolean;
   scope: ToolScope;
 }
+
+// Workflow types
+export type StepType =
+  | 'navigate'
+  | 'go_back'
+  | 'go_forward'
+  | 'reload'
+  | 'wait_for_url'
+  | 'wait_for_navigation'
+  | 'click'
+  | 'click_at'
+  | 'hover'
+  | 'double_click'
+  | 'right_click'
+  | 'drag'
+  | 'type'
+  | 'slow_type'
+  | 'press_key'
+  | 'select_option'
+  | 'upload_file'
+  | 'scroll'
+  | 'scroll_element'
+  | 'scroll_into_view'
+  | 'wait_for_element'
+  | 'wait_for_text'
+  | 'screenshot'
+  | 'screenshot_element'
+  | 'get_page_state'
+  | 'get_page_text'
+  | 'get_cookies'
+  | 'extract'
+  | 'new_tab'
+  | 'switch_tab'
+  | 'close_tab'
+  | 'wait_for_new_tab'
+  | 'get_console_logs'
+  | 'sleep'
+  | 'set_variable'
+  | 'condition';
+
+export interface WorkflowStep {
+  id: string;
+  name: string;
+  description: string;
+  type: StepType;
+  params: Record<string, unknown>;
+  continue_on_error: boolean;
+  timeout_ms: number;
+}
+
+export interface Workflow {
+  id: string;
+  name: string;
+  description: string;
+  steps: WorkflowStep[];
+  variables: Record<string, unknown>;
+  created_at: number;
+  updated_at: number;
+}
+
+export type ExecutionStatus =
+  | 'pending'
+  | 'running'
+  | 'completed'
+  | 'failed'
+  | 'paused'
+  | 'cancelled';
+
+export interface StepResult {
+  step_id: string;
+  status: ExecutionStatus;
+  duration_ms: number;
+  output: unknown;
+  error: string | null;
+  started_at: number;
+  completed_at: number;
+}
+
+export interface WorkflowExecution {
+  id: string;
+  workflow_id: string;
+  profile_id: string;
+  status: ExecutionStatus;
+  current_step_index: number;
+  step_results: StepResult[];
+  variables: Record<string, unknown>;
+  started_at: number;
+  completed_at: number | null;
+  error: string | null;
+}
+
+export interface StepTypeInfo {
+  type: StepType;
+  name: string;
+  description: string;
+  params: ParamInfo[];
+}
+
+export interface ParamInfo {
+  name: string;
+  type: string;
+  required: boolean;
+  description: string;
+}

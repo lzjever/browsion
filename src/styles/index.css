@@ -2284,3 +2284,305 @@ input.readonly {
   padding: 3px 8px;
   font-size: 0.78rem;
 }
+
+/* ── Workflow Page ────────────────────────────────────────────────────────── */
+
+.workflow-list {
+  padding: 16px;
+}
+
+.workflow-list-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+}
+
+.workflow-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 16px;
+}
+
+.workflow-card {
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 16px;
+  background: var(--bg-secondary);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.workflow-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.workflow-card-header h3 {
+  margin: 0;
+  font-size: 1.1rem;
+}
+
+.workflow-step-count {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  background: var(--bg-primary);
+  padding: 2px 8px;
+  border-radius: 12px;
+}
+
+.workflow-description {
+  margin: 0;
+  font-size: 0.9rem;
+  color: var(--text-muted);
+  flex-grow: 1;
+}
+
+.workflow-card-footer {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+/* Workflow Editor Modal */
+
+.workflow-editor {
+  max-width: 900px;
+  width: 90vw;
+  max-height: 90vh;
+}
+
+.workflow-editor-body {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  max-height: calc(90vh - 150px);
+  overflow-y: auto;
+}
+
+.variables-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.variable-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.variable-row input:first-child {
+  flex: 1;
+}
+
+.variable-row input:nth-child(2) {
+  flex: 2;
+}
+
+.steps-editor {
+  display: flex;
+  gap: 16px;
+}
+
+.steps-list {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.step-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  cursor: pointer;
+  background: var(--bg-secondary);
+}
+
+.step-item:hover {
+  border-color: var(--primary-color);
+}
+
+.step-item.selected {
+  border-color: var(--primary-color);
+  background: rgba(67, 97, 238, 0.1);
+}
+
+.step-number {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--primary-color);
+  color: white;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.75rem;
+  font-weight: bold;
+}
+
+.step-name {
+  flex: 1;
+  font-weight: 500;
+}
+
+.step-type {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.add-step-buttons {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.step-details {
+  border-top: 1px solid var(--border-color);
+  padding-top: 16px;
+}
+
+.step-details-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.param-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.param-field label {
+  font-size: 0.9rem;
+  font-weight: 500;
+}
+
+/* Workflow Run Modal */
+
+.workflow-run-modal {
+  max-width: 700px;
+  width: 90vw;
+}
+
+.workflow-run-body {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.run-setup {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.workflow-preview {
+  background: var(--bg-secondary);
+  padding: 12px;
+  border-radius: 8px;
+}
+
+.workflow-preview h4 {
+  margin: 0 0 8px 0;
+}
+
+.workflow-preview ol {
+  margin: 0;
+  padding-left: 20px;
+}
+
+.workflow-preview li {
+  margin-bottom: 4px;
+}
+
+.continue-on-error {
+  color: var(--text-muted);
+  font-style: italic;
+  font-size: 0.85rem;
+}
+
+.execution-results {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.execution-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.execution-summary {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+  background: var(--bg-secondary);
+  padding: 12px;
+  border-radius: 8px;
+}
+
+.step-results {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.step-results h5 {
+  margin: 0 0 8px 0;
+}
+
+.step-result {
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  padding: 8px;
+}
+
+.step-result.completed {
+  border-left: 3px solid #22c55e;
+}
+
+.step-result.failed {
+  border-left: 3px solid #ef4444;
+  background: rgba(239, 68, 68, 0.05);
+}
+
+.step-result-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.step-result .step-number {
+  width: 20px;
+  height: 20px;
+  font-size: 0.7rem;
+}
+
+.step-result .step-name {
+  flex: 1;
+}
+
+.step-duration {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.step-error {
+  color: #ef4444;
+  font-size: 0.85rem;
+  margin-top: 4px;
+}

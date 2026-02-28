@@ -4,16 +4,32 @@ import { ProfileForm } from './components/ProfileForm';
 import { Settings } from './components/Settings';
 import { McpPage } from './components/McpPage';
 import { MonitorPage } from './components/MonitorPage';
+import { WorkflowList } from './components/WorkflowList';
 import type { BrowserProfile } from './types/profile';
 import './styles/index.css';
 
-type View = 'profiles' | 'settings' | 'mcp' | 'monitor';
+type View = 'profiles' | 'settings' | 'mcp' | 'monitor' | 'workflows';
 
 function App() {
   const [currentView, setCurrentView] = useState<View>('profiles');
   const [showProfileForm, setShowProfileForm] = useState(false);
   const [editingProfile, setEditingProfile] = useState<BrowserProfile | undefined>();
   const [refreshKey, setRefreshKey] = useState(0);
+  const [profiles, setProfiles] = useState<BrowserProfile[]>([]);
+
+  // Load profiles on mount
+  useState(() => {
+    const loadProfiles = async () => {
+      try {
+        const { tauriApi } = await import('./api/tauri');
+        const profileList = await tauriApi.getProfiles();
+        setProfiles(profileList);
+      } catch (e) {
+        console.error('Failed to load profiles:', e);
+      }
+    };
+    loadProfiles();
+  });
 
   const handleAddProfile = () => {
     setEditingProfile(undefined);
@@ -76,6 +92,12 @@ function App() {
           >
             Monitor
           </button>
+          <button
+            className={`nav-btn ${currentView === 'workflows' ? 'active' : ''}`}
+            onClick={() => setCurrentView('workflows')}
+          >
+            Workflows
+          </button>
         </nav>
       </header>
 
@@ -101,6 +123,8 @@ function App() {
         {currentView === 'mcp' && <McpPage />}
 
         {currentView === 'monitor' && <MonitorPage />}
+
+        {currentView === 'workflows' && <WorkflowList profiles={profiles} />}
       </main>
 
       {showProfileForm && (

@@ -2,6 +2,55 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.7.0] - 2026-02-28
+
+### Added
+
+#### Workflow Engine (Phase 2)
+- **Multi-step task automation** — define reusable workflows with sequences of browser actions
+- **Workflow Manager** — CRUD operations, persists to `~/.browsion/workflows/{id}.json`
+- **20+ Step Types**:
+  - Navigation: navigate, go_back, go_forward, reload, wait_for_url
+  - Mouse: click, hover, double_click, right_click, drag
+  - Keyboard: type, slow_type, press_key
+  - Forms: select_option, upload_file
+  - Scroll: scroll, scroll_element, scroll_into_view
+  - Wait: wait_for_element, wait_for_text, sleep
+  - Observe: screenshot, get_page_state, get_page_text, get_cookies
+  - Tabs: new_tab, switch_tab, close_tab, wait_for_new_tab
+  - Advanced: extract, get_console_logs, set_variable, condition
+- **Variable substitution** — use `${varname}` syntax in step parameters
+- **Error handling** — `continue_on_error` flag per step
+- **Timeout control** — configurable timeout per step (default 30s)
+
+#### Frontend Workflow UI
+- **Workflows tab** — new top-level navigation section
+- **Workflow List** — card grid showing all workflows with step counts
+- **Workflow Editor** — visual editor for creating/editing workflows:
+  - Name and description fields
+  - Variable editor (name/value pairs)
+  - Step list with drag-to-reorder support
+  - Parameter inputs based on step type
+  - Continue-on-error and timeout settings
+- **Run Modal** — select profile and execute workflow:
+  - Profile dropdown
+  - Step preview
+  - Live execution results
+  - Per-step status, duration, error messages
+
+#### Backend Implementation
+- `workflow/schema.rs` — data structures with serde serialization
+- `workflow/manager.rs` — persistence to JSON files
+- `workflow/executor.rs` — HTTP API-based execution engine
+- `commands/workflow.rs` — Tauri commands for CRUD and execution
+- `AppState.workflow_manager` field
+
+### Technical
+- Variable resolution via string substitution (`${varname}`)
+- HTTP client with API key authentication
+- Atomic file writes for workflow persistence
+- Display trait for StepType enum
+
 ## [0.6.0] - 2026-02-28
 
 ### Added

@@ -1,5 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
-import type { BrowserProfile, AppSettings, RunningStatus, McpConfig, McpToolInfo, ProxyPreset, SnapshotInfo } from '../types/profile';
+import type { BrowserProfile, AppSettings, RunningStatus, McpConfig, McpToolInfo, ProxyPreset, SnapshotInfo, Workflow, WorkflowExecution, StepTypeInfo } from '../types/profile';
 import type { BrowserSource, CftVersionInfo } from '../types/profile';
 
 export const tauriApi = {
@@ -148,5 +148,38 @@ export const tauriApi = {
 
   async deleteSnapshot(profileId: string, name: string): Promise<void> {
     return invoke('delete_snapshot', { profileId, name });
+  },
+
+  // Workflows
+  async listWorkflows(): Promise<Workflow[]> {
+    return invoke('list_workflows');
+  },
+
+  async getWorkflow(id: string): Promise<Workflow> {
+    return invoke('get_workflow', { id });
+  },
+
+  async saveWorkflow(workflow: Workflow): Promise<Workflow> {
+    return invoke('save_workflow', { workflow });
+  },
+
+  async deleteWorkflow(id: string): Promise<void> {
+    return invoke('delete_workflow', { id });
+  },
+
+  async runWorkflow(
+    workflowId: string,
+    profileId: string,
+    variables: Record<string, unknown> = {}
+  ): Promise<WorkflowExecution> {
+    return invoke('run_workflow', { workflowId, profileId, variables });
+  },
+
+  async validateWorkflowStep(step: Record<string, unknown>): Promise<boolean> {
+    return invoke('validate_workflow_step', { step });
+  },
+
+  async getStepTypes(): Promise<StepTypeInfo[]> {
+    return invoke('get_step_types');
   },
 };
