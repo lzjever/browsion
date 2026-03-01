@@ -388,3 +388,192 @@ async fn test_run_server_fails_when_port_in_use() {
     assert!(result.is_err());
     assert!(result.unwrap_err().contains("Failed to bind"));
 }
+
+// ---------------------------------------------------------------------------
+// Profile update
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_api_update_profile() {
+    let state = make_state();
+    let api_app = app(state.clone(), None);
+
+    // Create profile first
+    let profile = serde_json::json!({
+        "id": "upd-001",
+        "name": "Original",
+        "description": "",
+        "user_data_dir": "/tmp/upd-001",
+        "lang": "en-US",
+        "tags": [],
+        "custom_args": []
+    });
+    let req = axum::http::Request::builder()
+        .method("POST")
+        .uri("/api/profiles")
+        .header("content-type", "application/json")
+        .body(json_body(&profile))
+        .unwrap();
+    api_app.oneshot(req).await.unwrap();
+
+    // Update it
+    let api_app = app(state.clone(), None);
+    let updated = serde_json::json!({
+        "id": "upd-001",
+        "name": "Updated Name",
+        "description": "new desc",
+        "user_data_dir": "/tmp/upd-001",
+        "lang": "en-US",
+        "tags": [],
+        "custom_args": []
+    });
+    let req = axum::http::Request::builder()
+        .method("PUT")
+        .uri("/api/profiles/upd-001")
+        .header("content-type", "application/json")
+        .body(json_body(&updated))
+        .unwrap();
+    let res = api_app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    // Verify change persisted
+    let api_app = app(state.clone(), None);
+    let req = axum::http::Request::builder()
+        .uri("/api/profiles/upd-001")
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let res = api_app.oneshot(req).await.unwrap();
+    let body = axum::body::to_bytes(res.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let p: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(p["name"], "Updated Name");
+    assert_eq!(p["description"], "new desc");
+}
+
+#[tokio::test]
+async fn test_api_update_profile_not_found() {
+    let app = make_app_no_auth();
+    let updated = serde_json::json!({
+        "id": "no-such",
+        "name": "X",
+        "description": "",
+        "user_data_dir": "/tmp/x",
+        "lang": "en-US",
+        "tags": [],
+        "custom_args": []
+    });
+    let req = axum::http::Request::builder()
+        .method("PUT")
+        .uri("/api/profiles/no-such")
+        .header("content-type", "application/json")
+        .body(json_body(&updated))
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+}
+
+// ---------------------------------------------------------------------------
+// Action log endpoints
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_api_action_log_get_returns_ok_with_array() {
+    let app = make_app_no_auth();
+    let req = axum::http::Request::builder()
+        .uri("/api/action_log")
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(res.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    // Response must be a valid JSON array (empty when log is fresh)
+    let entries: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
+    assert!(entries.is_empty());
+}
+
+#[tokio::test]
+async fn test_api_action_log_delete_returns_no_content() {
+    let app = make_app_no_auth();
+    let req = axum::http::Request::builder()
+        .method("DELETE")
+        .uri("/api/action_log")
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+}
+
+#[tokio::test]
+async fn test_api_action_log_entries_have_expected_shape() {
+    // Push a synthetic entry by calling another API endpoint first, then read log.
+    // Since the action log middleware skips /api/action_log and /api/health routes,
+    // calling /api/profiles will produce an entry.
+    let state = make_state();
+
+    // Trigger a logged request via GET /api/profiles
+    let api_app = app(state.clone(), None);
+    let req = axum::http::Request::builder()
+        .uri("/api/profiles")
+        .body(axum::body::Body::empty())
+        .unwrap();
+    api_app.oneshot(req).await.unwrap();
+
+    // Give the spawned log task a moment to complete
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    // Read the action log
+    let api_app = app(state.clone(), None);
+    let req = axum::http::Request::builder()
+        .uri("/api/action_log")
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let res = api_app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(res.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let entries: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
+
+    // There should be exactly one entry from the /api/profiles call above
+    assert_eq!(entries.len(), 1, "Expected 1 action log entry");
+    let entry = &entries[0];
+
+    // Verify required fields from ActionEntry struct
+    assert!(entry["id"].is_string(), "id must be a string");
+    assert!(entry["ts"].is_number(), "ts must be a number (Unix ms)");
+    assert!(
+        entry["profile_id"].is_string(),
+        "profile_id must be a string"
+    );
+    assert!(entry["tool"].is_string(), "tool must be a string");
+    assert!(
+        entry["duration_ms"].is_number(),
+        "duration_ms must be a number"
+    );
+    assert!(entry["success"].is_boolean(), "success must be a boolean");
+    // `error` field is optional (skip_serializing_if = None) so no assertion needed
+}
+
+// ---------------------------------------------------------------------------
+// Profile snapshots
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_profile_snapshots_list_ghost() {
+    let app = make_app_no_auth();
+    let req = axum::http::Request::builder()
+        .uri("/api/profiles/ghost-profile/snapshots")
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    // Should not panic — either OK with empty array or server error
+    let status = res.status();
+    assert!(
+        status.is_success() || status.is_server_error(),
+        "Expected 2xx or 5xx, got {}",
+        status
+    );
+}
