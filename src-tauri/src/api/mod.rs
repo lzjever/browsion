@@ -525,15 +525,20 @@ async fn stop_recording(
     if let Some(cdp_port) = state.process_manager.get_cdp_port(&profile_id) {
         if let Ok(handle) = state.session_manager.get_client(&profile_id, cdp_port).await {
             let client = handle.lock().await;
-            let _ = client.stop_manual_recording().await;
 
-            // Extract manual recording events from console log
+            // First, extract manual recording events from console log
             let console_log = client.get_console_log().await;
-            for entry in console_log {
+            tracing::info!("Extracting events from {} console log entries", console_log.len());
+
+            let mut event_count = 0;
+            for entry in &console_log {
                 if let Some(args) = entry.get("args").and_then(|a| a.as_array()) {
                     if args.len() >= 2 && args[0] == "__BROWSION_EVENT__" {
+                        tracing::info!("Found BROWSION event: args[1] = {}", args[1]);
                         if args[1].is_string() {
-                            if let Ok(event_data) = serde_json::from_str::<serde_json::Value>(args[1].as_str().unwrap_or("")) {
+                            let event_str = args[1].as_str().unwrap_or("");
+                            if let Ok(event_data) = serde_json::from_str::<serde_json::Value>(event_str) {
+                                tracing::info!("Parsed event data: {:?}", event_data);
                                 if let (Some(event_type), Some(data)) = (
                                     event_data.get("type").and_then(|t| t.as_str()),
                                     event_data.get("data")
@@ -547,11 +552,14 @@ async fn stop_recording(
                                     };
 
                                     if let Some(at) = action_type {
-                                        let _ = state.recording_session_manager.add_action(
+                                        match state.recording_session_manager.add_action(
                                             &profile_id,
                                             at,
                                             data.clone(),
-                                        );
+                                        ) {
+                                            Ok(_) => event_count += 1,
+                                            Err(e) => tracing::error!("Failed to add action: {}", e),
+                                        }
                                     }
                                 }
                             }
@@ -559,6 +567,10 @@ async fn stop_recording(
                     }
                 }
             }
+            tracing::info!("Extracted {} manual recording events", event_count);
+
+            // Now stop the recording (this will send __BROWSION_STOPPED__)
+            let _ = client.stop_manual_recording().await;
         }
     }
 

@@ -475,11 +475,7 @@ impl CDPClient {
 
                                         // Check for manual recording events: __BROWSION_EVENT__
                                         if args.len() >= 2 && args[0] == "__BROWSION_EVENT__" {
-                                            if let Ok(event_data) = serde_json::from_str::<serde_json::Value>(&args[1]) {
-                                                // TODO: Send to recording session manager
-                                                // For now, just log it
-                                                tracing::debug!("Manual recording event: {}", event_data);
-                                            }
+                                            tracing::info!("Got manual recording event: {}", args.get(1).unwrap_or(&String::new()));
                                         }
 
                                         let mut log = console_log.lock().await;
@@ -2950,6 +2946,8 @@ impl CDPClient {
     /// Start manual recording by injecting JavaScript event listeners into the page.
     /// Events will be sent via console.log with a special prefix "__BROWSION_EVENT__".
     pub async fn start_manual_recording(&self) -> Result<(), String> {
+        tracing::info!("Starting manual recording for profile {}", self.profile_id);
+
         let script = r#"
             (function() {
                 // Avoid duplicate listeners
@@ -3048,7 +3046,8 @@ impl CDPClient {
             })();
         "#;
 
-        self.evaluate_js(script).await?;
+        let result = self.evaluate_js(script).await?;
+        tracing::info!("Manual recording script injected, result: {:?}", result);
         Ok(())
     }
 
