@@ -64,6 +64,30 @@ pub async fn run_workflow(
         return Err("API server not enabled".to_string());
     }
 
+    // Launch browser (or attach to existing session) before running workflow
+    let api_base = format!("http://127.0.0.1:{}", mcp.api_port);
+    let launch_url = format!("{}/api/launch/{}", api_base, profile_id);
+
+    // Check if browser is already running
+    let is_running = state.process_manager.is_running(&profile_id);
+
+    if !is_running {
+        // Launch browser
+        let client = reqwest::Client::new();
+        let mut req = client.post(&launch_url);
+        if let Some(ref key) = mcp.api_key {
+            req = req.header("X-API-Key", key);
+        }
+
+        let resp = req.send().await.map_err(|e| format!("Failed to launch browser: {}", e))?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let error_text = resp.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+            return Err(format!("Failed to launch browser: HTTP {} - {}", status, error_text));
+        }
+    }
+
     // Create executor
     let executor = crate::workflow::WorkflowExecutor::new(
         state.session_manager.clone(),
