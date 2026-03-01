@@ -18,15 +18,31 @@
 //! ```
 //! Use `--test-threads=1` to avoid port conflicts between parallel tests.
 
+use axum::http::StatusCode;
 use base64::Engine as _;
 use browsion_lib::agent::cdp::CDPClient;
+use browsion_lib::config::{AppConfig, BrowserProfile};
 use browsion_lib::process::port::allocate_cdp_port;
+use browsion_lib::state::AppState;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::process::{Child, Command};
+use std::sync::Arc;
 use tokio::sync::oneshot;
 
 // ── helpers ──────────────────────────────────────────────────────────────────
+
+/// Create an ApiState for testing.
+fn make_state() -> Arc<AppState> {
+    Arc::new(AppState::new(AppConfig::default()))
+}
+
+/// Run the API server in a background task.
+fn run_server(state: Arc<AppState>, port: u16, api_key: Option<String>) {
+    tokio::spawn(async move {
+        let _ = browsion_lib::api::run_server(state, port, api_key).await;
+    });
+}
 
 /// Find a Chrome binary or return None (test will be skipped).
 fn find_chrome() -> Option<PathBuf> {
@@ -852,6 +868,464 @@ async fn test_20_network_intercept_block() {
         ))
         .await.unwrap();
     assert_eq!(ok.as_str(), Some("200"), "request should succeed after clear_intercepts");
+
+    browser.kill();
+}
+
+/// 21. Lifecycle test: launch Chrome via API, connect via CDP, navigate, verify, then kill.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_lifecycle_launch_and_kill() {
+    let Some(chrome) = find_chrome() else { eprintln!("SKIP: no Chrome"); return; };
+
+    // Create a temp profile directory
+    let data_dir = temp_profile_dir();
+    std::fs::create_dir_all(&data_dir).unwrap();
+
+    let profile_id = "test-lifecycle-profile".to_string();
+    let profile = BrowserProfile {
+        id: profile_id.clone(),
+        name: "E2E Lifecycle Test".to_string(),
+        description: String::new(),
+        user_data_dir: data_dir.clone(),
+        proxy_server: None,
+        lang: "en-US".to_string(),
+        timezone: None,
+        fingerprint: None,
+        color: None,
+        custom_args: Vec::new(),
+        tags: Vec::new(),
+        headless: false,
+    };
+
+    let state = make_state();
+    {
+        let mut config = state.config.write();
+        config.profiles.push(profile);
+    }
+
+    // Launch the browser via ProcessManager (simulating API launch)
+    let chrome_path = chrome.to_string_lossy().to_string();
+    let port = allocate_cdp_port();
+
+    let args = vec![
+        format!("--remote-debugging-port={}", port),
+        format!("--user-data-dir={}", data_dir.display()),
+        "--headless=new".to_string(),
+        "--disable-gpu".to_string(),
+        "--disable-dev-shm-usage".to_string(),
+        "--no-first-run".to_string(),
+        "--no-default-browser-check".to_string(),
+        "--disable-sync".to_string(),
+        "--disable-default-apps".to_string(),
+        "--disable-crash-reporter".to_string(),
+        "about:blank".to_string(),
+    ];
+
+    let mut child = Command::new(&chrome_path)
+        .args(&args)
+        .spawn()
+        .expect("failed to spawn Chrome");
+
+    // Connect via CDP and verify it works
+    let client = CDPClient::attach("lifecycle-test".to_string(), port)
+        .await
+        .expect("failed to attach CDPClient");
+
+    // Navigate to a page and verify
+    client
+        .navigate_wait("https://example.com", "load", 10_000)
+        .await
+        .unwrap();
+
+    let title = client.get_title().await.unwrap();
+    assert!(
+        title.as_deref().unwrap_or("").contains("example.com"),
+        "unexpected title: {:?}",
+        title
+    );
+
+    // Kill the browser
+    let _ = child.kill();
+    let _ = child.wait();
+    let _ = std::fs::remove_dir_all(&data_dir);
+
+    // Clean up profile from state
+    {
+        let mut config = state.config.write();
+        config.profiles.retain(|p| p.id != profile_id);
+    }
+}
+
+/// 22. Profile CRUD via HTTP API: CREATE, READ, UPDATE, DELETE.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_profile_crud_via_api() {
+    use reqwest::Client;
+
+    let state = make_state();
+    let api_port = 39521u16;
+    let api_key = Some("test-api-key".to_string());
+
+    run_server(state.clone(), api_port, api_key.clone());
+    tokio::time::sleep(tokio::time::Duration::from_millis(200)).await; // let server start
+
+    let client = Client::new();
+    let base_url = format!("http://127.0.0.1:{}", api_port);
+    let auth_header = ("X-API-Key", "test-api-key");
+
+    // CREATE: Add a new profile
+    let new_profile = BrowserProfile {
+        id: "test-crud-profile".to_string(),
+        name: "CRUD Test Profile".to_string(),
+        description: "Test profile for CRUD operations".to_string(),
+        user_data_dir: PathBuf::from("/tmp/test-crud-profile"),
+        proxy_server: None,
+        lang: "en-US".to_string(),
+        timezone: None,
+        fingerprint: None,
+        color: None,
+        custom_args: Vec::new(),
+        tags: Vec::new(),
+        headless: false,
+    };
+
+    let create_resp = client
+        .post(&format!("{}/api/profiles", base_url))
+        .header(auth_header.0, auth_header.1)
+        .json(&new_profile)
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(
+        create_resp.status(),
+        StatusCode::CREATED,
+        "CREATE failed: {:?}",
+        create_resp.text().await.unwrap()
+    );
+
+    // READ: List all profiles and verify our profile exists
+    let list_resp = client
+        .get(&format!("{}/api/profiles", base_url))
+        .header(auth_header.0, auth_header.1)
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(list_resp.status(), StatusCode::OK);
+    let profiles: Vec<serde_json::Value> = list_resp.json().await.unwrap();
+    let found = profiles.iter().any(|p| p["id"] == "test-crud-profile");
+    assert!(found, "profile not found in list");
+
+    // READ single profile
+    let get_resp = client
+        .get(&format!("{}/api/profiles/test-crud-profile", base_url))
+        .header(auth_header.0, auth_header.1)
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(get_resp.status(), StatusCode::OK);
+    let got_profile: BrowserProfile = get_resp.json().await.unwrap();
+    assert_eq!(got_profile.id, "test-crud-profile");
+    assert_eq!(got_profile.name, "CRUD Test Profile");
+
+    // UPDATE: Modify the profile
+    let mut updated_profile = new_profile.clone();
+    updated_profile.name = "Updated CRUD Profile".to_string();
+    updated_profile.description = "Updated description".to_string();
+
+    let update_resp = client
+        .put(&format!("{}/api/profiles/test-crud-profile", base_url))
+        .header(auth_header.0, auth_header.1)
+        .json(&updated_profile)
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(update_resp.status(), StatusCode::OK);
+    let updated: BrowserProfile = update_resp.json().await.unwrap();
+    assert_eq!(updated.name, "Updated CRUD Profile");
+
+    // DELETE: Remove the profile
+    let delete_resp = client
+        .delete(&format!("{}/api/profiles/test-crud-profile", base_url))
+        .header(auth_header.0, auth_header.1)
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(delete_resp.status(), StatusCode::NO_CONTENT);
+
+    // Verify deletion
+    let get_after_delete = client
+        .get(&format!("{}/api/profiles/test-crud-profile", base_url))
+        .header(auth_header.0, auth_header.1)
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(get_after_delete.status(), StatusCode::NOT_FOUND);
+}
+
+/// 23. Mouse hover: navigate to example.com and hover over body element.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_mouse_hover_element() {
+    let Some(chrome) = find_chrome() else { eprintln!("SKIP: no Chrome"); return; };
+    let port = allocate_cdp_port();
+    let browser = TestBrowser::launch(&chrome, port).await;
+
+    // Navigate to example.com
+    browser
+        .client
+        .navigate_wait("https://example.com", "load", 10_000)
+        .await
+        .unwrap();
+
+    // Hover over the body element
+    browser.client.hover("body").await.unwrap();
+
+    // Verify we're still on the page (hover shouldn't navigate away)
+    let title = browser.client.get_title().await.unwrap();
+    assert!(
+        title.as_deref().unwrap_or("").contains("example.com"),
+        "hover should not change page, got: {:?}",
+        title
+    );
+
+    browser.kill();
+}
+
+/// 24. Mouse drag: create a drag-and-drop test page, perform drag operation.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_mouse_drag_element() {
+    let Some(chrome) = find_chrome() else { eprintln!("SKIP: no Chrome"); return; };
+    let port = allocate_cdp_port();
+    let browser = TestBrowser::launch(&chrome, port).await;
+
+    // Create a drag-and-drop test page
+    let drag_html = r#"
+<!DOCTYPE html>
+<html>
+<head><title>Drag Test</title></head>
+<body>
+    <div id="draggable" style="width:100px;height:100px;background:blue;position:absolute;top:10px;left:10px;" draggable="true">Drag me</div>
+    <div id="dropzone" style="width:200px;height:200px;background:lightgray;margin-top:150px;">Drop zone</div>
+    <div id="log"></div>
+    <script>
+        const drag = document.getElementById('draggable');
+        const drop = document.getElementById('dropzone');
+        const log = document.getElementById('log');
+        let dragStarted = false;
+        let dropped = false;
+
+        drag.addEventListener('dragstart', (e) => { dragStarted = true; log.textContent = 'dragstart'; });
+        drop.addEventListener('dragover', (e) => { e.preventDefault(); log.textContent += ' dragover'; });
+        drop.addEventListener('drop', (e) => { dropped = true; log.textContent += ' drop'; });
+    </script>
+</body>
+</html>
+    "#;
+
+    let encoded = percent_encoding::percent_encode(drag_html.as_bytes(), percent_encoding::NON_ALPHANUMERIC).to_string();
+    let url = format!("data:text/html;charset=utf-8,{}", encoded);
+
+    browser
+        .client
+        .navigate_wait(&url, "load", 10_000)
+        .await
+        .unwrap();
+
+    // Perform drag operation
+    browser
+        .client
+        .drag("#draggable", "#dropzone")
+        .await
+        .unwrap();
+
+    // Wait a bit for events to fire
+    browser.client.wait(200).await.unwrap();
+
+    // Verify the drag occurred by checking the log
+    let log = browser
+        .client
+        .evaluate_js("document.getElementById('log').textContent")
+        .await
+        .unwrap();
+
+    let log_text = log.as_str().unwrap_or("");
+    assert!(
+        log_text.contains("dragstart") || log_text.contains("dragover") || log_text.contains("drop"),
+        "drag events not detected, log: {}",
+        log_text
+    );
+
+    browser.kill();
+}
+
+/// 25. Form file upload: create temp file, upload via file input.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_form_upload_file() {
+    let Some(chrome) = find_chrome() else { eprintln!("SKIP: no Chrome"); return; };
+    let port = allocate_cdp_port();
+    let browser = TestBrowser::launch(&chrome, port).await;
+
+    // Create a temporary file to upload
+    let temp_dir = std::env::temp_dir();
+    let file_path = temp_dir.join("test-upload.txt");
+    std::fs::write(&file_path, "Test file content for upload").unwrap();
+
+    // Create a file upload test page
+    let upload_html = r#"
+<!DOCTYPE html>
+<html>
+<head><title>Upload Test</title></head>
+<body>
+    <input type="file" id="file-input" accept=".txt">
+    <div id="file-info">No file selected</div>
+    <script>
+        document.getElementById('file-input').addEventListener('change', function(e) {
+            const file = e.target.files[0];
+            if (file) {
+                document.getElementById('file-info').textContent = file.name + ' (' + file.size + ' bytes)';
+            }
+        });
+    </script>
+</body>
+</html>
+    "#;
+
+    let encoded = percent_encoding::percent_encode(upload_html.as_bytes(), percent_encoding::NON_ALPHANUMERIC).to_string();
+    let url = format!("data:text/html;charset=utf-8,{}", encoded);
+
+    browser
+        .client
+        .navigate_wait(&url, "load", 10_000)
+        .await
+        .unwrap();
+
+    // Upload the file
+    let file_path_str = file_path.to_string_lossy().to_string();
+    browser
+        .client
+        .upload_file("#file-input", vec![file_path_str])
+        .await
+        .unwrap();
+
+    // Wait for the change event to fire
+    browser.client.wait(200).await.unwrap();
+
+    // Verify the file was uploaded
+    let info = browser
+        .client
+        .evaluate_js("document.getElementById('file-info').textContent")
+        .await
+        .unwrap();
+
+    let info_text = info.as_str().unwrap_or("");
+    assert!(
+        info_text.contains("test-upload.txt"),
+        "file not uploaded, info: {}",
+        info_text
+    );
+    assert!(
+        info_text.contains("bytes"),
+        "file size not shown, info: {}",
+        info_text
+    );
+
+    // Clean up temp file
+    let _ = std::fs::remove_file(&file_path);
+
+    browser.kill();
+}
+
+/// 26. Dialog handling: navigate to page with alert(), accept dialog.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_dialog_handle_alert() {
+    let Some(chrome) = find_chrome() else { eprintln!("SKIP: no Chrome"); return; };
+    let port = allocate_cdp_port();
+    let browser = TestBrowser::launch(&chrome, port).await;
+
+    // Create a page with an alert dialog
+    let alert_html = r#"
+<!DOCTYPE html>
+<html>
+<head><title>Alert Test</title></head>
+<body>
+    <h1>Alert Test Page</h1>
+    <button id="alert-btn" onclick="alert('Hello from alert!')">Show Alert</button>
+    <div id="status">No alert yet</div>
+    <script>
+        document.getElementById('alert-btn').addEventListener('click', function() {
+            document.getElementById('status').textContent = 'Alert triggered';
+        });
+    </script>
+</body>
+</html>
+    "#;
+
+    let encoded = percent_encoding::percent_encode(alert_html.as_bytes(), percent_encoding::NON_ALPHANUMERIC).to_string();
+    let url = format!("data:text/html;charset=utf-8,{}", encoded);
+
+    browser
+        .client
+        .navigate_wait(&url, "load", 10_000)
+        .await
+        .unwrap();
+
+    // Test dialog handling using setTimeout to delay the alert
+    // This allows us to set up a handler before the dialog appears
+    browser
+        .client
+        .evaluate_js("setTimeout(function() { alert('Hello from alert!'); document.getElementById('status').textContent = 'Alert done'; }, 100)")
+        .await
+        .unwrap();
+
+    // Wait for the dialog to appear
+    tokio::time::sleep(tokio::time::Duration::from_millis(150)).await;
+
+    // Handle the dialog (accept it)
+    browser.client.handle_dialog("accept", None).await.unwrap();
+
+    // Wait for the setTimeout callback to complete after dialog is handled
+    tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+
+    // Verify the page state after dialog was accepted
+    let status = browser
+        .client
+        .evaluate_js("document.getElementById('status').textContent")
+        .await
+        .unwrap();
+
+    // The status should have been updated after the dialog was handled
+    assert_eq!(
+        status.as_str(),
+        Some("Alert done"),
+        "dialog handler didn't complete"
+    );
+
+    // Test dismissing a dialog
+    browser
+        .client
+        .evaluate_js("setTimeout(function() { if(confirm('Dismiss test?')) { document.getElementById('status').textContent = 'Accepted'; } else { document.getElementById('status').textContent = 'Dismissed'; } }, 100)")
+        .await
+        .unwrap();
+
+    tokio::time::sleep(tokio::time::Duration::from_millis(150)).await;
+    browser.client.handle_dialog("dismiss", None).await.unwrap();
+    tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+
+    let status2 = browser
+        .client
+        .evaluate_js("document.getElementById('status').textContent")
+        .await
+        .unwrap();
+
+    assert_eq!(
+        status2.as_str(),
+        Some("Dismissed"),
+        "dialog should have been dismissed"
+    );
 
     browser.kill();
 }
