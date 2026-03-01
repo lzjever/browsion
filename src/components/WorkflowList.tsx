@@ -41,8 +41,8 @@ export const WorkflowList: React.FC<WorkflowListProps> = ({ profiles }) => {
       description: '',
       steps: [],
       variables: {},
-      created_at: 0,
-      updated_at: 0,
+      created_at: Date.now(),
+      updated_at: Date.now(),
     });
   };
 
