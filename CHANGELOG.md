@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.9.1] - 2026-03-01
+
+### Testing
+- **Comprehensive API coverage** — expanded integration tests from 20 to 85 test cases, covering all browser control endpoints
+- **All browser routes tested** — every API route now has a "not running" error-path test (64 browser routes × HTTP methods)
+- **Profile update tests** — PUT `/api/profiles/:id` success and 404 cases
+- **Action log endpoint tests** — GET and DELETE `/api/action_log` integration tests plus entry-shape validation
+- **Profile snapshots tests** — list endpoint for unknown profile returns 200 with empty array
+- **ActionLog unit tests** — push/filter/clear/capacity-limit plus `days_to_ymd` algorithm correctness
+- **Path-parsing unit tests** — `parse_path_for_log` covering browser, launch, kill, and CRUD paths
+- **Recording-mapping unit tests** — `tool_to_recorded_action` for all mapped and unmapped tools
+
 ## [0.9.0] - 2026-03-01
 
 ### Added

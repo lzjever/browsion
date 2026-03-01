@@ -1,6 +1,6 @@
 [package]
 name = "browsion"
-version = "0.9.0"
+version = "0.9.1"
 description = "Cross-platform browser launcher for managing Chrome profiles"
 authors = ["you"]
 edition = "2021"
