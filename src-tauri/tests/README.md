@@ -56,8 +56,6 @@ Tests run with `--test-threads=1` to avoid port conflicts.
 
 ## Current Coverage
 
-- **Total tests**: 38
-- **P0 Critical**: 6 tests (lifecycle, profile CRUD, hover, drag, upload, dialog)
-- **P1 High**: 6 tests (emulate, touch, frames, snapshots, cookies, action log)
-- **P2 Medium**: 6 tests (network mock, PDF, mouse variants, scroll, wait, focus)
-- **Existing**: 20 tests (navigation, AX tree, forms, tabs, etc.)
+- **Total tests**: 47
+- All tests follow standardized `test_<category>_<operation>_<variant>` naming
+- Coverage includes: navigate, mouse, keyboard, form, axref, tabs, cookies, storage, console, network, screenshot, profile, lifecycle, snapshot, emulate, touch, frames, dialog, workflow, recording

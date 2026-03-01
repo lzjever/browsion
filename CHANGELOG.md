@@ -2,6 +2,31 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.9.4] - 2026-03-01
+
+### Testing
+- **Testid standardization** — all 47 E2E tests now follow `test_<category>_<operation>_<variant>` pattern
+- **Renamed 20 tests** — converted numbered tests (test_01-test_20) to descriptive testid names
+- **Form interactions** — test_form_select_dropdown_option for dropdown selection
+- **Mouse operations** — test_mouse_click_at_viewport_coordinates for direct coordinate clicks
+- **Storage operations** — test_storage_clear_local_storage, test_storage_remove_local_key
+- **Cookie operations** — test_cookies_delete_specific_cookie
+- **Data extraction** — test_observe_extract_structured_data
+- **Geolocation emulation** — test_emulate_set_geolocation
+- **Workflow execution** — test_workflow_execute_simple_navigate via HTTP API
+- **Recording lifecycle** — test_recording_lifecycle_via_api via HTTP API
+
+### Test Coverage
+- **Total test count** — 242 tests (18 frontend + 79 lib + 92 API integration + 6 config + 47 E2E)
+- **E2E breakdown** — All tests follow standardized naming covering navigate, mouse, keyboard, form, axref, tabs, cookies, storage, console, network, screenshot, profile, lifecycle, snapshot, emulate, touch, frames, dialog, workflow, recording
+
+### New Features
+- **Workflow HTTP API** — REST endpoints for workflow CRUD and execution
+- **Recording HTTP API** — REST endpoints for recording lifecycle (start/stop/status)
+
+### Breaking Changes
+- Test function names changed — E2E test names now follow standardized pattern
+
 ## [0.9.3] - 2026-03-01
 
 ### Testing
