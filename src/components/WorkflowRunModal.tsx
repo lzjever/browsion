@@ -32,8 +32,15 @@ export const WorkflowRunModal: React.FC<WorkflowRunModalProps> = ({
     loadRunningStatus();
   }, []);
 
-  // Filter profiles by running status
-  const runningProfiles = profiles.filter((p) => runningStatus[p.id]);
+  // Show all profiles, but indicate which ones are running
+  const allProfiles = profiles.sort((a, b) => {
+    // Sort running profiles first
+    const aRunning = !!runningStatus[a.id];
+    const bRunning = !!runningStatus[b.id];
+    if (aRunning && !bRunning) return -1;
+    if (!aRunning && bRunning) return 1;
+    return a.name.localeCompare(b.name);
+  });
 
   const handleRun = async () => {
     if (!selectedProfileId) {
@@ -91,11 +98,14 @@ export const WorkflowRunModal: React.FC<WorkflowRunModalProps> = ({
                   disabled={running}
                 >
                   <option value="">-- Choose a profile --</option>
-                  {runningProfiles.map((profile) => (
-                    <option key={profile.id} value={profile.id}>
-                      {profile.name}
-                    </option>
-                  ))}
+                  {allProfiles.map((profile) => {
+                    const isRunning = !!runningStatus[profile.id];
+                    return (
+                      <option key={profile.id} value={profile.id}>
+                        {profile.name}{isRunning ? ' (Running)' : ''}
+                      </option>
+                    );
+                  })}
                 </select>
               </div>
 
