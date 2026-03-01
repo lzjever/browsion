@@ -2074,3 +2074,37 @@ async fn test_form_select_dropdown_option() {
 
     browser.kill();
 }
+
+/// 40. Mouse click at: direct viewport coordinates.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_mouse_click_at_viewport_coordinates() {
+    let Some(chrome) = find_chrome() else { eprintln!("SKIP: no Chrome"); return; };
+    let port = allocate_cdp_port();
+    let browser = TestBrowser::launch(&chrome, port).await;
+
+    // Create test page with click tracker
+    let html = r#"
+    <!DOCTYPE html>
+    <html><head><title>Click At Test</title></head>
+    <body>
+        <div id="output">not clicked</div>
+        <script>
+            document.addEventListener('click', (e) => {
+                document.getElementById('output').textContent = `clicked at ${e.clientX},${e.clientY}`;
+            });
+        </script>
+    </body></html>
+    "#;
+    let encoded = percent_encoding::percent_encode(html.as_bytes(), percent_encoding::NON_ALPHANUMERIC).to_string();
+    browser.client.navigate_wait(&format!("data:text/html;charset=utf-8,{}", encoded), "load", 5000).await.unwrap();
+
+    // Click at center of viewport (400, 300)
+    browser.client.click_at(400.0, 300.0).await.unwrap();
+
+    // Verify click was recorded
+    let result = browser.client.evaluate_js("document.getElementById('output').textContent").await.unwrap();
+    let text = result.as_str().unwrap_or("");
+    assert!(text.contains("clicked at"), "output should show clicked at coordinates: {}", text);
+
+    browser.kill();
+}
