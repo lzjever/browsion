@@ -297,9 +297,9 @@ async fn test_navigate_read_page_info_basic() {
     browser.kill();
 }
 
-/// JavaScript: evaluate basic expression.
+/// Console: evaluate JavaScript expression.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn test_javascript_evaluate_basic_expression() {
+async fn test_console_evaluate_js_expression() {
     let Some(chrome) = find_chrome() else { eprintln!("SKIP: no Chrome"); return; };
     let (base, _srv) = spawn_test_server().await;
     let port = allocate_cdp_port();
@@ -695,9 +695,9 @@ async fn test_storage_set_and_get_local() {
     browser.kill();
 }
 
-/// Observe: get full page text.
+/// Navigate: get full page text.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn test_observe_get_page_text() {
+async fn test_navigate_get_page_text() {
     let Some(chrome) = find_chrome() else { eprintln!("SKIP: no Chrome"); return; };
     let (base, _srv) = spawn_test_server().await;
     let port = allocate_cdp_port();
