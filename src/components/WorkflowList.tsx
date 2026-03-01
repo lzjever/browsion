@@ -3,16 +3,23 @@ import { tauriApi } from '../api/tauri';
 import type { Workflow, BrowserProfile } from '../types/profile';
 import { WorkflowEditor } from './WorkflowEditor';
 import { WorkflowRunModal } from './WorkflowRunModal';
+import { useToast } from './Toast';
+import { ConfirmDialog } from './ConfirmDialog';
 
 interface WorkflowListProps {
   profiles: BrowserProfile[];
 }
 
 export const WorkflowList: React.FC<WorkflowListProps> = ({ profiles }) => {
+  const { showToast } = useToast();
   const [workflows, setWorkflows] = useState<Workflow[]>([]);
   const [editingWorkflow, setEditingWorkflow] = useState<Workflow | undefined>();
   const [runningWorkflow, setRunningWorkflow] = useState<Workflow | undefined>();
   const [refreshKey, setRefreshKey] = useState(0);
+  const [confirmState, setConfirmState] = useState<{
+    message: string;
+    onConfirm: () => void;
+  } | null>(null);
 
   useEffect(() => {
     loadWorkflows();
@@ -43,14 +50,20 @@ export const WorkflowList: React.FC<WorkflowListProps> = ({ profiles }) => {
     setEditingWorkflow(workflow);
   };
 
-  const handleDelete = async (id: string) => {
-    if (!confirm('Delete this workflow?')) return;
-    try {
-      await tauriApi.deleteWorkflow(id);
-      setRefreshKey((prev) => prev + 1);
-    } catch (e) {
-      alert(`Failed to delete: ${e}`);
-    }
+  const handleDelete = (id: string, name: string) => {
+    setConfirmState({
+      message: `Delete workflow "${name}"?`,
+      onConfirm: async () => {
+        setConfirmState(null);
+        try {
+          await tauriApi.deleteWorkflow(id);
+          setRefreshKey((prev) => prev + 1);
+          showToast('Workflow deleted', 'success');
+        } catch (e) {
+          showToast(`Failed to delete: ${e}`, 'error');
+        }
+      },
+    });
   };
 
   const handleRun = (workflow: Workflow) => {
@@ -99,7 +112,7 @@ export const WorkflowList: React.FC<WorkflowListProps> = ({ profiles }) => {
                 </button>
                 <button
                   className="btn btn-danger-outline btn-sm"
-                  onClick={() => handleDelete(workflow.id)}
+                  onClick={() => handleDelete(workflow.id, workflow.name)}
                 >
                   Delete
                 </button>
@@ -122,6 +135,14 @@ export const WorkflowList: React.FC<WorkflowListProps> = ({ profiles }) => {
           workflow={runningWorkflow}
           profiles={profiles}
           onClose={() => setRunningWorkflow(undefined)}
+        />
+      )}
+
+      {confirmState && (
+        <ConfirmDialog
+          message={confirmState.message}
+          onConfirm={confirmState.onConfirm}
+          onCancel={() => setConfirmState(null)}
         />
       )}
     </div>

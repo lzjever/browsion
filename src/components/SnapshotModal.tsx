@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { tauriApi } from '../api/tauri';
 import type { SnapshotInfo } from '../types/profile';
+import { ConfirmDialog } from './ConfirmDialog';
+import { UI_CONSTANTS } from './constants';
 
 interface SnapshotModalProps {
   profileId: string;
@@ -31,6 +33,10 @@ export const SnapshotModal: React.FC<SnapshotModalProps> = ({
   const [deleting, setDeleting] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+  const [confirmState, setConfirmState] = useState<{
+    message: string;
+    onConfirm: () => void;
+  } | null>(null);
 
   useEffect(() => {
     loadSnapshots();
@@ -61,7 +67,7 @@ export const SnapshotModal: React.FC<SnapshotModalProps> = ({
       await tauriApi.createSnapshot(profileId, name);
       setNewName('');
       setSuccess(`Snapshot "${name}" created`);
-      setTimeout(() => setSuccess(null), 3000);
+      setTimeout(() => setSuccess(null), UI_CONSTANTS.SUCCESS_MESSAGE_DURATION_MS);
       await loadSnapshots();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -70,33 +76,43 @@ export const SnapshotModal: React.FC<SnapshotModalProps> = ({
     }
   };
 
-  const handleRestore = async (name: string) => {
-    if (!confirm(`Restore snapshot "${name}"? This will overwrite the current profile data.`)) return;
-    try {
-      setRestoring(name);
-      setError(null);
-      await tauriApi.restoreSnapshot(profileId, name);
-      setSuccess(`Restored snapshot "${name}"`);
-      setTimeout(() => setSuccess(null), 3000);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setRestoring(null);
-    }
+  const handleRestore = (name: string) => {
+    setConfirmState({
+      message: `Restore snapshot "${name}"? This will overwrite the current profile data.`,
+      onConfirm: async () => {
+        setConfirmState(null);
+        try {
+          setRestoring(name);
+          setError(null);
+          await tauriApi.restoreSnapshot(profileId, name);
+          setSuccess(`Restored snapshot "${name}"`);
+          setTimeout(() => setSuccess(null), UI_CONSTANTS.SUCCESS_MESSAGE_DURATION_MS);
+        } catch (err) {
+          setError(err instanceof Error ? err.message : String(err));
+        } finally {
+          setRestoring(null);
+        }
+      },
+    });
   };
 
-  const handleDelete = async (name: string) => {
-    if (!confirm(`Delete snapshot "${name}"?`)) return;
-    try {
-      setDeleting(name);
-      setError(null);
-      await tauriApi.deleteSnapshot(profileId, name);
-      await loadSnapshots();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setDeleting(null);
-    }
+  const handleDelete = (name: string) => {
+    setConfirmState({
+      message: `Delete snapshot "${name}"?`,
+      onConfirm: async () => {
+        setConfirmState(null);
+        try {
+          setDeleting(name);
+          setError(null);
+          await tauriApi.deleteSnapshot(profileId, name);
+          await loadSnapshots();
+        } catch (err) {
+          setError(err instanceof Error ? err.message : String(err));
+        } finally {
+          setDeleting(null);
+        }
+      },
+    });
   };
 
   return (
@@ -104,7 +120,7 @@ export const SnapshotModal: React.FC<SnapshotModalProps> = ({
       <div className="modal-content" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
           <h3>Snapshots — {profileName}</h3>
-          <button className="modal-close" onClick={onClose}>✕</button>
+          <button className="modal-close" onClick={onClose} aria-label="Close modal">✕</button>
         </div>
 
         {error && <div className="error-message">{error}</div>}
@@ -169,6 +185,14 @@ export const SnapshotModal: React.FC<SnapshotModalProps> = ({
           </table>
         )}
       </div>
+
+      {confirmState && (
+        <ConfirmDialog
+          message={confirmState.message}
+          onConfirm={confirmState.onConfirm}
+          onCancel={() => setConfirmState(null)}
+        />
+      )}
     </div>
   );
 };

@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { tauriApi } from '../api/tauri';
-import type { Recording, BrowserProfile } from '../types/profile';
+import type { Recording, BrowserProfile, RecordedAction } from '../types/profile';
+import { useToast } from './Toast';
 
 interface RecordingPlayerProps {
   recording: Recording;
@@ -13,18 +14,21 @@ export const RecordingPlayer: React.FC<RecordingPlayerProps> = ({
   profiles,
   onClose,
 }) => {
+  const { showToast } = useToast();
   const [selectedProfileId, setSelectedProfileId] = useState('');
   const [currentActionIndex, setCurrentActionIndex] = useState<number | null>(null);
   const [playing, setPlaying] = useState(false);
   const [completed, setCompleted] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const handlePlay = async () => {
     if (!selectedProfileId) {
-      alert('Please select a profile');
+      showToast('Please select a profile', 'warning');
       return;
     }
 
     setPlaying(true);
+    setError(null);
     setCurrentActionIndex(0);
 
     // Execute actions sequentially
@@ -35,9 +39,9 @@ export const RecordingPlayer: React.FC<RecordingPlayerProps> = ({
       try {
         await executeAction(action, selectedProfileId);
       } catch (e) {
-        if (!confirm(`Action ${i + 1} failed: ${e}\n\nContinue?`)) {
-          break;
-        }
+        setError(`Action ${i + 1} failed: ${e}`);
+        showToast(`Action ${i + 1} failed: ${e}`, 'error');
+        break;
       }
     }
 
@@ -46,7 +50,7 @@ export const RecordingPlayer: React.FC<RecordingPlayerProps> = ({
     setCurrentActionIndex(null);
   };
 
-  const executeAction = async (action: any, profileId: string) => {
+  const executeAction = async (action: RecordedAction, profileId: string) => {
     const config = await tauriApi.getMcpConfig();
     if (!config?.enabled) throw new Error('API server not enabled');
 
@@ -67,7 +71,7 @@ export const RecordingPlayer: React.FC<RecordingPlayerProps> = ({
     }
 
     if (action.type === 'sleep') {
-      const duration = action.params.duration_ms || 1000;
+      const duration = (action.params.duration_ms as number) || 1000;
       await new Promise(resolve => setTimeout(resolve, duration));
       return;
     }
@@ -91,7 +95,7 @@ export const RecordingPlayer: React.FC<RecordingPlayerProps> = ({
       <div className="modal-content recording-player" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
           <h3>Playing: {recording.name}</h3>
-          <button className="modal-close" onClick={onClose}>✕</button>
+          <button className="modal-close" onClick={onClose} aria-label="Close modal">✕</button>
         </div>
 
         <div className="recording-player-body">
@@ -149,7 +153,12 @@ export const RecordingPlayer: React.FC<RecordingPlayerProps> = ({
             })}
           </div>
 
-          {completed && (
+          {error && (
+            <div className="error-message">
+              {error}
+            </div>
+          )}
+          {completed && !error && (
             <div className="success-message">
               Playback completed! {recording.actions.length} actions executed.
             </div>
@@ -160,7 +169,7 @@ export const RecordingPlayer: React.FC<RecordingPlayerProps> = ({
           <button className="btn btn-secondary" onClick={onClose}>
             {completed ? 'Close' : 'Cancel'}
           </button>
-          {!completed && !playing && (
+          {!completed && !playing && !error && (
             <button
               className="btn btn-primary"
               onClick={handlePlay}

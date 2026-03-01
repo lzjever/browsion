@@ -3,6 +3,8 @@ import { listen } from '@tauri-apps/api/event';
 import { tauriApi } from '../api/tauri';
 import { useWebSocket, type BrowserStatusEvent, type ActionLogEntryEvent } from '../hooks/useWebSocket';
 import type { BrowserProfile, ActionEntry } from '../types/profile';
+import { useToast } from './Toast';
+import { UI_CONSTANTS } from './constants';
 
 interface Thumbnail {
   profileId: string;
@@ -12,6 +14,7 @@ interface Thumbnail {
 }
 
 export const MonitorPage: React.FC = () => {
+  const { showToast } = useToast();
   const [profiles, setProfiles] = useState<BrowserProfile[]>([]);
   const [runningIds, setRunningIds] = useState<string[]>([]);
   const [thumbnails, setThumbnails] = useState<Record<string, Thumbnail>>({});
@@ -46,7 +49,7 @@ export const MonitorPage: React.FC = () => {
       setAllActions((prev) => {
         const exists = prev.some((a) => a.id === entry.id);
         if (exists) return prev;
-        return [entry, ...prev].slice(0, 200); // Keep max 200
+        return [entry, ...prev].slice(0, UI_CONSTANTS.MAX_ACTION_LOG_ENTRIES);
       });
     }, []),
     onProfilesChanged: useCallback(() => {
@@ -64,7 +67,7 @@ export const MonitorPage: React.FC = () => {
         const headers: Record<string, string> = {};
         if (cfg.api_key) headers['X-API-Key'] = cfg.api_key;
         try {
-          const res = await fetch(`http://127.0.0.1:${cfg.api_port}/api/action_log?limit=200`, { headers });
+          const res = await fetch(`http://127.0.0.1:${cfg.api_port}/api/action_log?limit=${UI_CONSTANTS.MAX_ACTION_LOG_ENTRIES}`, { headers });
           if (res.ok) {
             const data: ActionEntry[] = await res.json();
             setAllActions(data);
@@ -160,7 +163,7 @@ export const MonitorPage: React.FC = () => {
     // Initial fetch (action log loaded via WS, screenshots still polled)
     pollScreenshots();
 
-    const ssInterval = setInterval(pollScreenshots, 3000);
+    const ssInterval = setInterval(pollScreenshots, UI_CONSTANTS.SCREENSHOT_POLL_INTERVAL_MS);
 
     // Pause when tab hidden
     const onVisChange = () => {
@@ -201,7 +204,7 @@ export const MonitorPage: React.FC = () => {
       a.click();
       URL.revokeObjectURL(url);
     } catch (e) {
-      alert(`Export failed: ${e}`);
+      showToast(`Export failed: ${e}`, 'error');
     }
   };
 
@@ -231,9 +234,10 @@ export const MonitorPage: React.FC = () => {
           }
         );
         const result = await res.json();
-        alert(`Imported ${result.imported} cookies${result.errors?.length ? `, ${result.errors.length} errors` : ''}`);
+        const msg = `Imported ${result.imported} cookies${result.errors?.length ? `, ${result.errors.length} errors` : ''}`;
+        showToast(msg, result.errors?.length ? 'warning' : 'success');
       } catch (e) {
-        alert(`Import failed: ${e}`);
+        showToast(`Import failed: ${e}`, 'error');
       }
     };
     input.click();
@@ -281,7 +285,7 @@ export const MonitorPage: React.FC = () => {
                 {thumb ? (
                   <img
                     src={thumb.src}
-                    alt="screenshot"
+                    alt={`Screenshot for ${getProfileName(id)}`}
                     className="monitor-thumbnail"
                   />
                 ) : (

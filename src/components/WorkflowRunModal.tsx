@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { tauriApi } from '../api/tauri';
 import type { Workflow, BrowserProfile, WorkflowExecution, ExecutionStatus, RunningStatus } from '../types/profile';
+import { useToast } from './Toast';
 
 interface WorkflowRunModalProps {
   workflow: Workflow;
@@ -13,6 +14,7 @@ export const WorkflowRunModal: React.FC<WorkflowRunModalProps> = ({
   profiles,
   onClose,
 }) => {
+  const { showToast } = useToast();
   const [selectedProfileId, setSelectedProfileId] = useState('');
   const [execution, setExecution] = useState<WorkflowExecution | null>(null);
   const [running, setRunning] = useState(false);
@@ -35,7 +37,7 @@ export const WorkflowRunModal: React.FC<WorkflowRunModalProps> = ({
 
   const handleRun = async () => {
     if (!selectedProfileId) {
-      alert('Please select a profile');
+      showToast('Please select a profile', 'warning');
       return;
     }
 
@@ -48,7 +50,7 @@ export const WorkflowRunModal: React.FC<WorkflowRunModalProps> = ({
       );
       setExecution(result);
     } catch (e) {
-      alert(`Failed to run workflow: ${e}`);
+      showToast(`Failed to run workflow: ${e}`, 'error');
     } finally {
       setRunning(false);
     }
@@ -75,7 +77,7 @@ export const WorkflowRunModal: React.FC<WorkflowRunModalProps> = ({
       <div className="modal-content workflow-run-modal" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
           <h3>Run Workflow: {workflow.name}</h3>
-          <button className="modal-close" onClick={onClose}>✕</button>
+          <button className="modal-close" onClick={onClose} aria-label="Close modal">✕</button>
         </div>
 
         <div className="workflow-run-body">

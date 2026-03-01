@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { tauriApi } from '../api/tauri';
 import type { Workflow, WorkflowStep, StepType, StepTypeInfo } from '../types/profile';
+import { useToast } from './Toast';
 
 interface WorkflowEditorProps {
   workflow: Workflow;
@@ -13,6 +14,7 @@ export const WorkflowEditor: React.FC<WorkflowEditorProps> = ({
   onSave,
   onCancel,
 }) => {
+  const { showToast } = useToast();
   const [name, setName] = useState(workflow.name);
   const [description, setDescription] = useState(workflow.description);
   const [steps, setSteps] = useState<WorkflowStep[]>(workflow.steps);
@@ -58,7 +60,7 @@ export const WorkflowEditor: React.FC<WorkflowEditorProps> = ({
 
   const handleSave = async () => {
     if (!name.trim()) {
-      alert('Workflow name is required');
+      showToast('Workflow name is required', 'warning');
       return;
     }
 
@@ -75,9 +77,10 @@ export const WorkflowEditor: React.FC<WorkflowEditorProps> = ({
 
     try {
       await tauriApi.saveWorkflow(workflowToSave);
+      showToast('Workflow saved', 'success');
       onSave();
     } catch (e) {
-      alert(`Failed to save workflow: ${e}`);
+      showToast(`Failed to save workflow: ${e}`, 'error');
     }
   };
 
@@ -89,7 +92,7 @@ export const WorkflowEditor: React.FC<WorkflowEditorProps> = ({
       <div className="modal-content workflow-editor" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
           <h3>{workflow.id ? 'Edit Workflow' : 'New Workflow'}</h3>
-          <button className="modal-close" onClick={onCancel}>✕</button>
+          <button className="modal-close" onClick={onCancel} aria-label="Close modal">✕</button>
         </div>
 
         <div className="workflow-editor-body">

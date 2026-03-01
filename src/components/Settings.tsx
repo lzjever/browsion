@@ -3,6 +3,7 @@ import { listen } from '@tauri-apps/api/event';
 import { tauriApi } from '../api/tauri';
 import type { AppSettings, BrowserSource, CftVersionInfo, ProxyPreset } from '../types/profile';
 import { open } from '@tauri-apps/plugin-dialog';
+import { UI_CONSTANTS } from './constants';
 
 type CftDownloadProgress =
   | { phase: 'download'; loaded: number; total: number | null }
@@ -151,7 +152,7 @@ export const Settings: React.FC = () => {
       const path = await tauriApi.getChromePath();
       setEffectivePath(path);
       setSuccess('Custom Chrome path saved');
-      setTimeout(() => setSuccess(null), 3000);
+      setTimeout(() => setSuccess(null), UI_CONSTANTS.SUCCESS_MESSAGE_DURATION_MS);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -175,7 +176,7 @@ export const Settings: React.FC = () => {
       const path = await tauriApi.getChromePath();
       setEffectivePath(path);
       setSuccess(`Now using Chrome for Testing (${cftChannel} ${cftVersion || 'latest'}). Path updated above.`);
-      setTimeout(() => setSuccess(null), 5000);
+      setTimeout(() => setSuccess(null), UI_CONSTANTS.LONG_SUCCESS_MESSAGE_DURATION_MS);
       successRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -205,8 +206,8 @@ export const Settings: React.FC = () => {
       setEffectivePath(path);
       setSuccess(`Downloaded: ${versionInfo.channel} ${versionInfo.version}`);
       setDownloadCompleteMessage(`${versionInfo.channel} ${versionInfo.version} ready. Click "Use Chrome for Testing" to switch.`);
-      setTimeout(() => setSuccess(null), 5000);
-      setTimeout(() => setDownloadCompleteMessage(null), 5000);
+      setTimeout(() => setSuccess(null), UI_CONSTANTS.LONG_SUCCESS_MESSAGE_DURATION_MS);
+      setTimeout(() => setDownloadCompleteMessage(null), UI_CONSTANTS.LONG_SUCCESS_MESSAGE_DURATION_MS);
       successRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
       await loadSettings();
     } catch (err) {
@@ -379,7 +380,7 @@ export const Settings: React.FC = () => {
                       downloadProgress.phase === 'download' &&
                       downloadProgress.total != null &&
                       downloadProgress.total > 0
-                        ? `${Math.round((downloadProgress.loaded / downloadProgress.total) * 100)}%`
+                        ? `${Math.round((downloadProgress.loaded / downloadProgress.total) * UI_CONSTANTS.PERCENTAGE_MULTIPLIER)}%`
                         : downloadProgress.phase === 'extracting'
                           ? '100%'
                           : '0%',

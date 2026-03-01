@@ -2,15 +2,22 @@ import React, { useState, useEffect } from 'react';
 import { tauriApi } from '../api/tauri';
 import type { Recording, BrowserProfile } from '../types/profile';
 import { RecordingPlayer } from './RecordingPlayer';
+import { useToast } from './Toast';
+import { ConfirmDialog } from './ConfirmDialog';
 
 interface RecordingListProps {
   profiles: BrowserProfile[];
 }
 
 export const RecordingList: React.FC<RecordingListProps> = ({ profiles }) => {
+  const { showToast } = useToast();
   const [recordings, setRecordings] = useState<Recording[]>([]);
   const [playingRecording, setPlayingRecording] = useState<Recording | undefined>();
   const [refreshKey, setRefreshKey] = useState(0);
+  const [confirmState, setConfirmState] = useState<{
+    message: string;
+    onConfirm: () => void;
+  } | null>(null);
 
   useEffect(() => {
     loadRecordings();
@@ -25,29 +32,30 @@ export const RecordingList: React.FC<RecordingListProps> = ({ profiles }) => {
     }
   };
 
-  const handleDelete = async (id: string) => {
-    if (!confirm('Delete this recording?')) return;
-    try {
-      await tauriApi.deleteRecording(id);
-      setRefreshKey((prev) => prev + 1);
-    } catch (e) {
-      alert(`Failed to delete: ${e}`);
-    }
+  const handleDelete = (id: string, name: string) => {
+    setConfirmState({
+      message: `Delete recording "${name}"?`,
+      onConfirm: async () => {
+        setConfirmState(null);
+        try {
+          await tauriApi.deleteRecording(id);
+          setRefreshKey((prev) => prev + 1);
+          showToast('Recording deleted', 'success');
+        } catch (e) {
+          showToast(`Failed to delete: ${e}`, 'error');
+        }
+      },
+    });
   };
 
   const handleConvertToWorkflow = async (recording: Recording) => {
-    const workflowName = prompt(
-      'Enter workflow name:',
-      `Workflow from ${recording.name}`
-    );
-    if (!workflowName) return;
-
     try {
+      const workflowName = `Workflow from ${recording.name}`;
       const workflow = await tauriApi.recordingToWorkflow(recording.id, workflowName);
       await tauriApi.saveWorkflow(workflow);
-      alert('Workflow created successfully! Check the Workflows tab.');
+      showToast('Workflow created successfully! Check the Workflows tab.', 'success');
     } catch (e) {
-      alert(`Failed to create workflow: ${e}`);
+      showToast(`Failed to create workflow: ${e}`, 'error');
     }
   };
 
@@ -105,7 +113,7 @@ export const RecordingList: React.FC<RecordingListProps> = ({ profiles }) => {
                 </button>
                 <button
                   className="btn btn-danger-outline btn-sm"
-                  onClick={() => handleDelete(recording.id)}
+                  onClick={() => handleDelete(recording.id, recording.name)}
                 >
                   Delete
                 </button>
@@ -120,6 +128,14 @@ export const RecordingList: React.FC<RecordingListProps> = ({ profiles }) => {
           recording={playingRecording}
           profiles={profiles}
           onClose={() => setPlayingRecording(undefined)}
+        />
+      )}
+
+      {confirmState && (
+        <ConfirmDialog
+          message={confirmState.message}
+          onConfirm={confirmState.onConfirm}
+          onCancel={() => setConfirmState(null)}
         />
       )}
     </div>

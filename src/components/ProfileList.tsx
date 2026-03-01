@@ -6,6 +6,7 @@ import type { BrowserProfile, RunningStatus, RecordingSessionInfo } from '../typ
 import { useToast } from './Toast';
 import { ConfirmDialog } from './ConfirmDialog';
 import { SnapshotModal } from './SnapshotModal';
+import { UI_CONSTANTS } from './constants';
 
 interface ProfileListProps {
   onEditProfile: (profile: BrowserProfile) => void;
@@ -87,7 +88,7 @@ export const ProfileList: React.FC<ProfileListProps> = ({ onEditProfile, onClone
       } catch (err) {
         console.error('Failed to refresh status:', err);
       }
-    }, 5000);
+    }, UI_CONSTANTS.POLLING_INTERVAL_MS);
 
     return () => {
       unlistenProfiles.then((f) => f());

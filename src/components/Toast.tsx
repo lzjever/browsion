@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useState, useCallback } from 'react';
+import { UI_CONSTANTS } from './constants';
 
 export type ToastType = 'success' | 'error' | 'info' | 'warning';
 
@@ -26,7 +27,7 @@ export const ToastProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     setToasts(prev => [...prev, { id, message, type }]);
     setTimeout(() => {
       setToasts(prev => prev.filter(t => t.id !== id));
-    }, 4000);
+    }, UI_CONSTANTS.TOAST_DURATION_MS);
   }, []);
 
   return (
@@ -39,6 +40,7 @@ export const ToastProvider: React.FC<{ children: React.ReactNode }> = ({ childre
             <button
               className="toast-close"
               onClick={() => setToasts(prev => prev.filter(t => t.id !== toast.id))}
+              aria-label="Close notification"
             >
               ×
             </button>
