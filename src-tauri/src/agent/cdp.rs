@@ -835,6 +835,15 @@ impl CDPClient {
             .await?;
         *self.current_url.lock().await = url.to_string();
 
+        // Update tab registry URL (for get_url reliability)
+        let active_target_id = self.active_target_id.lock().await;
+        let mut tab_registry = self.tab_registry.lock().await;
+        if let Some(tab) = tab_registry.get_mut(&*active_target_id) {
+            tab.url = url.to_string();
+        }
+        drop(tab_registry);
+        drop(active_target_id);
+
         // Clear AX ref cache on navigation
         self.ax_ref_cache.lock().await.clear();
         *self.inflight_requests.lock().await = 0;
@@ -889,7 +898,31 @@ impl CDPClient {
     }
 
     /// Get current URL from browser
+    /// Returns the URL from the tracked tab state, which is more reliable than
+    /// window.location.href (which can return chrome-error://chromewebdata/ for
+    /// successful navigations).
     pub async fn get_url(&self) -> Result<String, String> {
+        // First try to get URL from tab registry (most reliable)
+        let active_target_id = self.active_target_id.lock().await;
+        let tab_registry = self.tab_registry.lock().await;
+        let url_from_tab = if let Some(tab_state) = tab_registry.get(&*active_target_id) {
+            if !tab_state.url.is_empty() && !tab_state.url.starts_with("chrome-error:") {
+                Some(tab_state.url.clone())
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        drop(tab_registry);
+        drop(active_target_id);
+
+        if let Some(url) = url_from_tab {
+            *self.current_url.lock().await = url.clone();
+            return Ok(url);
+        }
+
+        // Fallback: try window.location.href (may be wrong in some cases)
         let result = self
             .send_command(
                 "Runtime.evaluate",
@@ -906,8 +939,14 @@ impl CDPClient {
             .and_then(|r| r.get("value"))
             .and_then(|v| v.as_str())
         {
-            *self.current_url.lock().await = url.to_string();
-            Ok(url.to_string())
+            // Filter out chrome-error URLs which indicate the JS context is wrong
+            if !url.starts_with("chrome-error:") {
+                *self.current_url.lock().await = url.to_string();
+                Ok(url.to_string())
+            } else {
+                // Return the tracked URL as fallback
+                Ok(self.current_url.lock().await.clone())
+            }
         } else {
             Ok(self.current_url.lock().await.clone())
         }
