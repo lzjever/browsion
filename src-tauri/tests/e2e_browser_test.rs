@@ -2108,3 +2108,56 @@ async fn test_mouse_click_at_viewport_coordinates() {
 
     browser.kill();
 }
+
+/// 41. Storage clear: clear localStorage.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_storage_clear_local_storage() {
+    let Some(chrome) = find_chrome() else { eprintln!("SKIP: no Chrome"); return; };
+    let (base, _srv) = spawn_test_server().await;
+    let port = allocate_cdp_port();
+    let browser = TestBrowser::launch(&chrome, port).await;
+
+    browser.client.navigate_wait(&format!("{}/storage", base), "load", 5000).await.unwrap();
+
+    // Set multiple items
+    browser.client.set_storage_item("local", "key1", "value1").await.unwrap();
+    browser.client.set_storage_item("local", "key2", "value2").await.unwrap();
+
+    // Clear all
+    browser.client.clear_storage("local").await.unwrap();
+
+    // Verify cleared
+    let remaining = browser.client.get_storage("local").await.unwrap();
+    assert!(remaining.as_object().unwrap().is_empty(), "localStorage should be empty after clear");
+
+    browser.kill();
+}
+
+/// 42. Storage remove: remove specific localStorage key.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_storage_remove_local_key() {
+    let Some(chrome) = find_chrome() else { eprintln!("SKIP: no Chrome"); return; };
+    let (base, _srv) = spawn_test_server().await;
+    let port = allocate_cdp_port();
+    let browser = TestBrowser::launch(&chrome, port).await;
+
+    browser.client.navigate_wait(&format!("{}/storage", base), "load", 5000).await.unwrap();
+
+    // Set items
+    browser.client.set_storage_item("local", "key1", "value1").await.unwrap();
+    browser.client.set_storage_item("local", "key2", "value2").await.unwrap();
+
+    // Remove one key
+    browser.client.remove_storage_item("local", "key1").await.unwrap();
+
+    // Verify only one remains via CDP
+    let result = browser.client.get_storage("local").await.unwrap();
+    assert_eq!(result.as_object().unwrap().len(), 1, "localStorage should have 1 item");
+    assert_eq!(
+        result.get("key2").and_then(|v| v.as_str()),
+        Some("value2"),
+        "key2 should remain"
+    );
+
+    browser.kill();
+}
