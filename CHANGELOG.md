@@ -2,6 +2,44 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.9.5] - 2026-03-01
+
+### New Features
+- **Attach to existing browser sessions** — `launch_browser` now connects to already-running browsers instead of returning an error, enabling workflows where users manually start browsers, log in to websites, then have AI agents take over
+- **Register external browsers** — new `register_external_browser` MCP tool and HTTP API endpoint for registering manually-started Chrome instances
+- **Session persistence and auto-reconnect** — browser sessions automatically persist across Tauri restarts, with automatic cleanup of dead sessions
+
+### Enhancements
+- **Launch API behavior change** — calling `launch` on a running browser now returns the existing process info (pid, cdp_port) instead of a 409 conflict error
+- **Improved URL tracking** — `get_url()` now prioritizes tracked tab state over JavaScript `window.location.href` for more reliable URL reporting
+- **Screenshot API reliability** — verified working with all formats (PNG, JPEG, WebP) and full-page capture
+
+### Bug Fixes
+- **HTTPS navigation URL** — fixed `get_url()` returning `chrome-error://chromewebdata/` instead of actual URL for successful navigations
+- **Screenshot function** — verified API working correctly, documented proper GET request usage
+
+### API Changes
+- **Enhanced** `POST /api/launch/:profile_id` — now attaches to existing browser if already running
+- **New** `POST /api/register-external` — register externally-launched browsers with CDP port validation
+- **MCP Tool** `launch_browser` — updated description to clarify attach-to-existing behavior
+- **New MCP Tool** `register_external_browser` — register manually-started browsers
+
+### Documentation
+- **External browser guide** — comprehensive guide for using manually-started browsers with AI agents
+- **Test fixes report** — detailed documentation of HTTPS navigation and screenshot fixes
+
+### Testing
+- Verified attach-to-existing functionality across 7 test scenarios
+- Tested edge cases: kill/restart, multiple attaches, invalid ports, duplicate registrations
+- All 242 tests passing (18 frontend + 79 lib + 92 API + 6 config + 47 E2E)
+
+### Internal
+- Session persistence improvements with CDP port probing on startup
+- Enhanced ProcessManager with `register_external()` method
+- Improved TabState URL synchronization on navigation
+
+---
+
 ## [0.9.4] - 2026-03-01
 
 ### Testing
