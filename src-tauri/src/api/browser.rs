@@ -143,6 +143,28 @@ fn default_scroll_amount() -> u32 {
     500
 }
 
+// ---------------------------------------------------------------------------
+// Recording helper
+// ---------------------------------------------------------------------------
+
+/// Helper macro to record an action to active recording session.
+/// Usage: `record_action!(state, profile_id, Navigate, { "url": req.url })`
+macro_rules! record_action {
+    ($state:expr, $profile_id:expr, $action_type:expr, $params:expr) => {
+        if let Ok(params) = serde_json::to_value($params) {
+            let _ = $state.recording_session_manager.add_action(
+                &$profile_id,
+                crate::recording::RecordedActionType::$action_type,
+                params,
+            );
+        }
+    };
+}
+
+// ---------------------------------------------------------------------------
+// Navigation handlers
+// ---------------------------------------------------------------------------
+
 #[derive(serde::Deserialize)]
 struct WaitForReq {
     selector: String,
@@ -501,6 +523,10 @@ async fn browser_navigate_wait(
         .map_err(cdp_err)?;
     let url = client.get_url().await.map_err(cdp_err)?;
     let title = client.get_title().await.map_err(cdp_err)?;
+
+    // Record to active recording session
+    record_action!(state, id, Navigate, { "url": req.url });
+
     Ok(Json(serde_json::json!({ "url": url, "title": title })))
 }
 
@@ -517,6 +543,10 @@ async fn browser_hover(
     let handle = state.session_manager.get_client(&id, cdp_port).await.map_err(cdp_err)?;
     let client = handle.lock().await;
     client.hover(&req.selector).await.map_err(cdp_err)?;
+
+    // Record to active recording session
+    record_action!(state, id, Hover, { "selector": req.selector });
+
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
@@ -553,6 +583,10 @@ async fn browser_click(
     let handle = state.session_manager.get_client(&id, cdp_port).await.map_err(cdp_err)?;
     let client = handle.lock().await;
     client.click(&req.selector).await.map_err(cdp_err)?;
+
+    // Record to active recording session
+    record_action!(state, id, Click, { "selector": req.selector });
+
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
@@ -593,6 +627,10 @@ async fn browser_type_text(
     let handle = state.session_manager.get_client(&id, cdp_port).await.map_err(cdp_err)?;
     let client = handle.lock().await;
     client.type_text(&req.selector, &req.text).await.map_err(cdp_err)?;
+
+    // Record to active recording session
+    record_action!(state, id, Type, { "selector": req.selector, "text": req.text });
+
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
