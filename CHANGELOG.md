@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.9.2] - 2026-03-01
+
+### Fixed
+- **App initialization** — `useState` → `useEffect` for profile loading; profiles now load correctly on startup
+- **Settings crash** — null guard on CfT version dropdown when versions not yet loaded
+- **ConfirmDialog UX** — added Escape key to dismiss, Enter to confirm, overlay click to close, `role="dialog"`, `autoFocus` on Cancel
+- **WorkflowList timestamps** — new workflows now initialize with current timestamp instead of Unix epoch 0
+- **MonitorPage performance** — URL and title now fetched in parallel (`Promise.all`), not sequentially
+- **MonitorPage memory leak** — dynamic file input elements now cleaned up after cookie import
+- **WorkflowEditor** — prevent adding duplicate empty variable keys; auto-select last step when current deleted
+- **Error resilience** — added React ErrorBoundary to prevent blank screen on component crash
+
+### Testing
+- **Vitest setup** — frontend test infrastructure with jsdom and @testing-library/react
+- **Frontend unit tests** — formatBytes utility, profileMatchesFilter logic, UI_CONSTANTS validation
+- **Backend integration** — profile list with multiple entries, tags/args roundtrip, duplicate ID detection, action log with real content, action log clear verification
+- **Backend unit** — workflow empty steps, variables roundtrip, step type serialization, recording with no actions, all RecordedActionType variants
+
 ## [0.9.1] - 2026-03-01
 
 ### Testing
