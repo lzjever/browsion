@@ -2914,6 +2914,15 @@ impl CDPClient {
         Ok(())
     }
 
+    /// Grant browser permissions (e.g., geolocation) for a specific origin.
+    pub async fn grant_permissions(&self, permissions: &[&str], origin: &str) -> Result<(), String> {
+        self.send_browser_command("Browser.grantPermissions", json!({
+            "permissions": permissions,
+            "origin": origin,
+        })).await?;
+        Ok(())
+    }
+
     /// Override geolocation coordinates.
     pub async fn set_geolocation(&self, latitude: f64, longitude: f64, accuracy: f64) -> Result<(), String> {
         self.send_command("Emulation.setGeolocationOverride", json!({

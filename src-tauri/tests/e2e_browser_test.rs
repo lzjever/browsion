@@ -171,7 +171,8 @@ async fn spawn_test_server() -> (String, oneshot::Sender<()>) {
         .route("/console", get(|| async { Html(HTML_CONSOLE) }))
         .route("/storage", get(|| async { Html(HTML_STORAGE) }))
         .route("/tabs", get(|| async { Html(HTML_TABS) }))
-        .route("/interact", get(|| async { Html(HTML_INTERACT) }));
+        .route("/interact", get(|| async { Html(HTML_INTERACT) }))
+        .route("/geolocation", get(|| async { Html(HTML_GEOLOCATION) }));
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr: SocketAddr = listener.local_addr().unwrap();
@@ -268,6 +269,15 @@ const HTML_INTERACT: &str = r#"<!DOCTYPE html>
       document.getElementById('keylog').textContent += e.key;
     });
   </script>
+</body>
+</html>"#;
+
+const HTML_GEOLOCATION: &str = r#"<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><title>Browsion Geolocation Test</title></head>
+<body>
+  <h1>Geolocation Test Page</h1>
+  <p>This page tests geolocation emulation.</p>
 </body>
 </html>"#;
 
@@ -2218,6 +2228,39 @@ async fn test_observe_extract_structured_data() {
     assert!(result.is_object(), "result should be object");
     assert_eq!(result.get("name").and_then(|v| v.as_str()), Some("Test Product"));
     assert_eq!(result.get("price").and_then(|v| v.as_str()), Some("$19.99"));
+
+    browser.kill();
+}
+
+/// 45. Emulation: set geolocation.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_emulate_set_geolocation() {
+    let Some(chrome) = find_chrome() else { eprintln!("SKIP: no Chrome"); return; };
+    let (base, _srv) = spawn_test_server().await;
+    let port = allocate_cdp_port();
+    let browser = TestBrowser::launch(&chrome, port).await;
+
+    browser.client.navigate_wait(&format!("{}/geolocation", base), "load", 5000).await.unwrap();
+
+    // Grant geolocation permission for localhost before setting override
+    browser.client.grant_permissions(&["geolocation"], &base).await.unwrap();
+    browser.client.set_geolocation(37.7749, -122.4194, 10.0).await.unwrap();
+
+    let result = browser.client.evaluate_js(
+        r#"
+        new Promise(resolve => {
+            navigator.geolocation.getCurrentPosition(pos => {
+                resolve({lat: pos.coords.latitude, lng: pos.coords.longitude});
+            }, () => resolve(null));
+        })
+        "#
+    ).await.unwrap();
+
+    assert!(result.is_object(), "should get geolocation");
+    let lat = result.get("lat").and_then(|v| v.as_f64());
+    let lng = result.get("lng").and_then(|v| v.as_f64());
+    assert!(lat.is_some() && (lat.unwrap() - 37.7749).abs() < 0.01);
+    assert!(lng.is_some() && (lng.unwrap() - (-122.4194)).abs() < 0.01);
 
     browser.kill();
 }
