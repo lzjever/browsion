@@ -485,6 +485,14 @@ async fn start_recording(
             )
         })?;
 
+    // Start manual recording by injecting JS listeners
+    if let Some(cdp_port) = state.process_manager.get_cdp_port(&profile_id) {
+        if let Ok(handle) = state.session_manager.get_client(&profile_id, cdp_port).await {
+            let client = handle.lock().await;
+            let _ = client.start_manual_recording().await;
+        }
+    }
+
     // Emit event for UI update
     state.emit("recording-status-changed");
 
@@ -512,6 +520,47 @@ async fn stop_recording(
             .to_string(),
         )
     })?;
+
+    // Stop manual recording and extract events from console log
+    if let Some(cdp_port) = state.process_manager.get_cdp_port(&profile_id) {
+        if let Ok(handle) = state.session_manager.get_client(&profile_id, cdp_port).await {
+            let client = handle.lock().await;
+            let _ = client.stop_manual_recording().await;
+
+            // Extract manual recording events from console log
+            let console_log = client.get_console_log().await;
+            for entry in console_log {
+                if let Some(args) = entry.get("args").and_then(|a| a.as_array()) {
+                    if args.len() >= 2 && args[0] == "__BROWSION_EVENT__" {
+                        if args[1].is_string() {
+                            if let Ok(event_data) = serde_json::from_str::<serde_json::Value>(args[1].as_str().unwrap_or("")) {
+                                if let (Some(event_type), Some(data)) = (
+                                    event_data.get("type").and_then(|t| t.as_str()),
+                                    event_data.get("data")
+                                ) {
+                                    let action_type = match event_type {
+                                        "click" => Some(crate::recording::RecordedActionType::Click),
+                                        "input" => Some(crate::recording::RecordedActionType::Type),
+                                        "change" => Some(crate::recording::RecordedActionType::Type),
+                                        "keydown" => Some(crate::recording::RecordedActionType::PressKey),
+                                        _ => None,
+                                    };
+
+                                    if let Some(at) = action_type {
+                                        let _ = state.recording_session_manager.add_action(
+                                            &profile_id,
+                                            at,
+                                            data.clone(),
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     let recording = state
         .recording_session_manager

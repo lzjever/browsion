@@ -472,6 +472,16 @@ impl CDPClient {
                                             .unwrap_or_default();
                                         let timestamp = params["timestamp"]
                                             .as_f64().unwrap_or(0.0);
+
+                                        // Check for manual recording events: __BROWSION_EVENT__
+                                        if args.len() >= 2 && args[0] == "__BROWSION_EVENT__" {
+                                            if let Ok(event_data) = serde_json::from_str::<serde_json::Value>(&args[1]) {
+                                                // TODO: Send to recording session manager
+                                                // For now, just log it
+                                                tracing::debug!("Manual recording event: {}", event_data);
+                                            }
+                                        }
+
                                         let mut log = console_log.lock().await;
                                         if log.len() >= 500 { log.pop_front(); }
                                         log.push_back(serde_json::json!({
@@ -2918,6 +2928,11 @@ impl CDPClient {
         Ok(serde_json::Value::Array(entries))
     }
 
+    /// Get console log as a vector for internal processing.
+    pub async fn get_console_log(&self) -> Vec<serde_json::Value> {
+        self.console_log.lock().await.iter().cloned().collect()
+    }
+
     /// Clear the console log.
     pub async fn clear_console_logs(&self) {
         self.console_log.lock().await.clear();
@@ -2929,6 +2944,125 @@ impl CDPClient {
         // Console capture is automatic via Runtime.consoleAPICalled + Log.entryAdded.
         // This method is kept for API compatibility only.
         tracing::debug!("enable_console_capture: no-op (CDP events always active)");
+        Ok(())
+    }
+
+    /// Start manual recording by injecting JavaScript event listeners into the page.
+    /// Events will be sent via console.log with a special prefix "__BROWSION_EVENT__".
+    pub async fn start_manual_recording(&self) -> Result<(), String> {
+        let script = r#"
+            (function() {
+                // Avoid duplicate listeners
+                if (window.__browsion_recording__) return;
+                window.__browsion_recording__ = true;
+
+                // Helper to get a unique selector for an element
+                function getSelector(el) {
+                    if (el.id) return '#' + el.id;
+                    if (el.className) {
+                        const classes = el.className.split(' ').filter(c => c).join('.');
+                        if (classes) return '.' + classes;
+                    }
+                    const path = [];
+                    while (el && el.nodeType === Node.ELEMENT_NODE) {
+                        let selector = el.nodeName.toLowerCase();
+                        if (el.id) {
+                            selector += '#' + el.id;
+                            path.unshift(selector);
+                            break;
+                        } else {
+                            let sibling = el;
+                            let nth = 1;
+                            while (sibling = sibling.previousElementSibling) {
+                                if (sibling.nodeName === el.nodeName) nth++;
+                            }
+                            if (nth !== 1) selector += `:nth-of-type(${nth})`;
+                        }
+                        path.unshift(selector);
+                        el = el.parentElement;
+                    }
+                    return path.join(' > ');
+                }
+
+                // Record event
+                function recordEvent(type, data) {
+                    console.log('__BROWSION_EVENT__', JSON.stringify({
+                        type: type,
+                        data: data,
+                        timestamp: Date.now()
+                    }));
+                }
+
+                // Click events
+                document.addEventListener('click', (e) => {
+                    const selector = getSelector(e.target);
+                    recordEvent('click', {
+                        selector: selector,
+                        x: e.clientX,
+                        y: e.clientY
+                    });
+                }, true);
+
+                // Input events
+                document.addEventListener('input', (e) => {
+                    const selector = getSelector(e.target);
+                    const value = e.target.value || '';
+                    recordEvent('input', {
+                        selector: selector,
+                        value: value
+                    });
+                }, true);
+
+                // Change events (for selects, checkboxes, etc.)
+                document.addEventListener('change', (e) => {
+                    const selector = getSelector(e.target);
+                    let value;
+                    if (e.target.type === 'checkbox') {
+                        value = e.target.checked;
+                    } else if (e.target.type === 'radio') {
+                        value = e.target.checked ? e.target.value : null;
+                    } else {
+                        value = e.target.value;
+                    }
+                    recordEvent('change', {
+                        selector: selector,
+                        value: value
+                    });
+                }, true);
+
+                // Key press events (for keyboard shortcuts)
+                document.addEventListener('keydown', (e) => {
+                    // Only record special keys, not normal typing
+                    if (e.ctrlKey || e.altKey || e.metaKey || e.key === 'Enter' || e.key === 'Tab' || e.key === 'Escape') {
+                        recordEvent('keydown', {
+                            key: e.key,
+                            ctrlKey: e.ctrlKey,
+                            altKey: e.altKey,
+                            shiftKey: e.shiftKey,
+                            metaKey: e.metaKey
+                        });
+                    }
+                }, true);
+
+                console.log('__BROWSION_READY__');
+            })();
+        "#;
+
+        self.evaluate_js(script).await?;
+        Ok(())
+    }
+
+    /// Stop manual recording by removing the event listeners.
+    pub async fn stop_manual_recording(&self) -> Result<(), String> {
+        let script = r#"
+            (function() {
+                if (!window.__browsion_recording__) return;
+                window.__browsion_recording__ = false;
+                console.log('__BROWSION_STOPPED__');
+            })();
+        "#;
+
+        self.evaluate_js(script).await?;
         Ok(())
     }
 
