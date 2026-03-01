@@ -138,7 +138,12 @@ pub async fn stop_recording(
     description: String,
     state: tauri::State<'_, Arc<AppState>>,
 ) -> Result<Recording, String> {
-    tracing::info!("Stopping recording for profile {}", profile_id);
+    tracing::info!("========================================");
+    tracing::info!("stop_recording called!");
+    tracing::info!("  profile_id: {}", profile_id);
+    tracing::info!("  name: {}", name);
+    tracing::info!("  description: {}", description);
+    tracing::info!("========================================");
 
     // Extract manual recording events from console log before stopping
     if let Some(cdp_port) = state.process_manager.get_cdp_port(&profile_id) {
@@ -152,15 +157,16 @@ pub async fn stop_recording(
                 tracing::info!("Console log has {} entries", console_log.len());
 
                 let mut browsion_event_count = 0;
-                for entry in &console_log {
+                for (idx, entry) in console_log.iter().enumerate() {
+                    tracing::info!("Checking entry #{}: {}", idx, entry);
                     if let Some(args) = entry.get("args").and_then(|a| a.as_array()) {
                         if args.len() >= 2 && args[0] == "__BROWSION_EVENT__" {
                             browsion_event_count += 1;
-                            tracing::info!("Found BROWSION event #{}: args[1] = {}", browsion_event_count, args[1]);
+                            tracing::info!("✓ Found BROWSION event #{}: args[1] = {}", browsion_event_count, args[1]);
                             if args[1].is_string() {
                                 let event_str = args[1].as_str().unwrap_or("");
                                 if let Ok(event_data) = serde_json::from_str::<serde_json::Value>(event_str) {
-                                    tracing::info!("Parsed event data: {:?}", event_data);
+                                    tracing::info!("  ✓ Parsed event data: {:?}", event_data);
                                     if let (Some(event_type), Some(data)) = (
                                         event_data.get("type").and_then(|t| t.as_str()),
                                         event_data.get("data")
@@ -179,18 +185,24 @@ pub async fn stop_recording(
                                                 at.clone(),
                                                 data.clone(),
                                             ) {
-                                                Ok(_) => tracing::info!("Successfully added action: {:?}", at),
-                                                Err(e) => tracing::error!("Failed to add action: {}", e),
+                                                Ok(_) => {
+                                                    tracing::info!("  ✓ Successfully added action: {:?}", at);
+                                                }
+                                                Err(e) => {
+                                                    tracing::error!("  ✗ Failed to add action: {}", e);
+                                                }
                                             }
+                                        } else {
+                                            tracing::warn!("  ✗ Unknown event type: {}", event_type);
                                         }
                                     } else {
-                                        tracing::warn!("Event missing type or data: {:?}", event_data);
+                                        tracing::warn!("  ✗ Event missing type or data: {:?}", event_data);
                                     }
                                 } else {
-                                    tracing::error!("Failed to parse event JSON: {}", event_str);
+                                    tracing::error!("  ✗ Failed to parse event JSON: {}", event_str);
                                 }
                             } else {
-                                tracing::warn!("Event args[1] is not a string: {:?}", args[1]);
+                                tracing::warn!("  ✗ Event args[1] is not a string: {:?}", args[1]);
                             }
                         }
                     }
@@ -208,6 +220,7 @@ pub async fn stop_recording(
         tracing::warn!("No CDP port found for profile {}", profile_id);
     }
 
+    tracing::info!("Calling stop_session...");
     let mut recording = state
         .recording_session_manager
         .stop_session(&profile_id)?;
@@ -226,6 +239,9 @@ pub async fn stop_recording(
 
     // Emit event for UI update
     state.emit("recording-status-changed");
+
+    tracing::info!("Recording saved: {} with {} actions", recording.name, recording.actions.len());
+    tracing::info!("========================================");
 
     Ok(recording)
 }
