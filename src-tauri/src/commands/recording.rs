@@ -138,6 +138,13 @@ pub async fn stop_recording(
     description: String,
     state: tauri::State<'_, Arc<AppState>>,
 ) -> Result<Recording, String> {
+    // Add a very early log that should always appear
+    println!("========================================");
+    println!("stop_recording Tauri command called!");
+    println!("  profile_id: {}", profile_id);
+    println!("  name: {}", name);
+    println!("  description: {}", description);
+    println!("========================================");
     tracing::info!("========================================");
     tracing::info!("stop_recording called!");
     tracing::info!("  profile_id: {}", profile_id);
