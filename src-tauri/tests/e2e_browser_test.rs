@@ -2042,3 +2042,35 @@ async fn test_axref_focus() {
 
     browser.kill();
 }
+
+/// 39. Form select option: select dropdown option.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_form_select_dropdown_option() {
+    let Some(chrome) = find_chrome() else { eprintln!("SKIP: no Chrome"); return; };
+    let port = allocate_cdp_port();
+    let browser = TestBrowser::launch(&chrome, port).await;
+
+    // Create test page with select dropdown
+    let html = r#"
+    <!DOCTYPE html>
+    <html><head><title>Select Test</title></head>
+    <body>
+        <select id="dropdown">
+            <option value="opt1">Option 1</option>
+            <option value="opt2">Option 2</option>
+            <option value="opt3">Option 3</option>
+        </select>
+    </body></html>
+    "#;
+    let encoded = percent_encoding::percent_encode(html.as_bytes(), percent_encoding::NON_ALPHANUMERIC).to_string();
+    browser.client.navigate_wait(&format!("data:text/html;charset=utf-8,{}", encoded), "load", 5000).await.unwrap();
+
+    // Select option by value
+    browser.client.select_option("#dropdown", "opt2").await.unwrap();
+
+    // Verify selection
+    let result = browser.client.evaluate_js("document.getElementById('dropdown').value").await.unwrap();
+    assert_eq!(result.as_str(), Some("opt2"), "dropdown should have opt2 selected");
+
+    browser.kill();
+}
