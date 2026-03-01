@@ -2,6 +2,36 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.9.3] - 2026-03-01
+
+### Testing
+- **E2E comprehensive expansion** — 20 → 38 tests (90% increase)
+- **Browser lifecycle** — `test_lifecycle_launch_and_kill` verifies Chrome launch, CDP connection, and process termination
+- **Profile CRUD via HTTP API** — `test_profile_crud_via_api` tests full CREATE/READ/UPDATE/DELETE cycle through API endpoints
+- **Mouse operations** — `test_mouse_hover_element`, `test_mouse_drag_element`, `test_mouse_double_and_right_click` cover hover, drag, double-click, and right-click
+- **Form handling** — `test_form_upload_file` verifies file upload via DOM.setFileInputFiles
+- **Dialog handling** — `test_dialog_handle_alert` tests JavaScript alert/confirm dismissal via Page.handleJavaScriptDialog
+- **Device emulation** — `test_emulate_viewport` validates Emulation.setDeviceMetricsOverride and viewport resizing
+- **Touch events** — `test_touch_tap_and_swipe` covers touch tap and swipe gestures
+- **iframe handling** — `test_frames_switch` tests frame listing via Page.getFrameTree
+- **Snapshots** — `test_snapshot_create_restore` verifies snapshot creation and listing via API
+- **Cookie portability** — `test_cookie_export_import` tests Network.getAllCookies after setting cookies
+- **Action logging** — `test_action_log_records_api_calls` confirms navigate_wait actions are logged
+- **Network mocking** — `test_network_mock_url` tests URL pattern interception and custom responses
+- **PDF generation** — `test_pdf_generation` validates Page.printToPDF output
+- **Wait operations** — `test_wait_for_element` tests element waiting with timeout
+- **Scroll operations** — `test_scroll_into_view` verifies scroll-into-view via JS
+- **AX reference** — `test_axref_focus` tests focus via accessibility tree reference IDs
+
+### Test Coverage
+- **Total test count** — 233 tests (18 frontend + 79 lib + 92 API integration + 6 config + 38 E2E)
+- **E2E breakdown** — 20 existing + 6 P0 (lifecycle/profile CRUD/mouse/forms/dialogs) + 6 P1 (emulate/touch/frames/snapshots/cookies/action log) + 6 P2 (network/PDF/mouse variants/scroll/wait/focus)
+
+### Documentation
+- Added `src-tauri/tests/README.md` with testid naming standard (`test_<category>_<operation>_<variant>`)
+- Documented 20 test categories (navigate, mouse, keyboard, form, axref, tabs, cookies, storage, console, network, screenshot, profile, lifecycle, snapshot, emulate, touch, frames, dialog, workflow, recording)
+- Chrome binary discovery order and isolation notes documented
+
 ## [0.9.2] - 2026-03-01
 
 ### Fixed
