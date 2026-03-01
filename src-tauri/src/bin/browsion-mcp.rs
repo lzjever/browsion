@@ -105,6 +105,16 @@ struct BrowserParam {
     profile_id: String,
 }
 
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct RegisterExternalParam {
+    /// Profile ID to register the browser under
+    profile_id: String,
+    /// Process ID of the externally-launched browser
+    pid: u32,
+    /// CDP remote debugging port the browser is listening on
+    cdp_port: u16,
+}
+
 // ── Navigation ──────────────────────────────────────────────────────────────
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -788,13 +798,27 @@ impl BrowsionMcpServer {
 
     // ── 2. Browser Lifecycle ───────────────────────────────────────────────
 
-    /// Launch a profile's browser
-    #[tool(description = "Launch Chrome for a profile with CDP enabled. Returns { pid, cdp_port }. If the browser is already running, returns an error — check get_running_browsers first. After launching, use navigate and other browser control tools with the same profile_id.")]
+    /// Launch a profile's browser (or attach to already-running instance)
+    #[tool(description = "Launch Chrome for a profile with CDP enabled. Returns { pid, cdp_port }. If the browser is already running for this profile, attaches to the existing session instead of launching a new one. This allows you to manually start a browser, log in to websites, then have the AI agent take control. After launching (or attaching), use navigate and other browser control tools with the same profile_id.")]
     async fn launch_browser(
         &self,
         Parameters(p): Parameters<BrowserParam>,
     ) -> Result<CallToolResult, McpError> {
         let body = self.api_post(&format!("/api/launch/{}", p.profile_id), &json!({})).await?;
+        Self::text_result(body)
+    }
+
+    /// Register an externally-launched browser (started outside of Browsion)
+    #[tool(description = "Register a browser that was started manually (e.g., you opened Chrome yourself with --remote-debugging-port=9222 and logged into a website). This tells Browsion about the existing browser so it can control it. Returns { pid, cdp_port }. After registering, you can use all browser control tools with the profile_id. Parameters: profile_id (string, required), pid (number, required), cdp_port (number, required).")]
+    async fn register_external_browser(
+        &self,
+        Parameters(p): Parameters<RegisterExternalParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let body = self.api_post("/api/register-external", &json!({
+            "profile_id": p.profile_id,
+            "pid": p.pid,
+            "cdp_port": p.cdp_port
+        })).await?;
         Self::text_result(body)
     }
 

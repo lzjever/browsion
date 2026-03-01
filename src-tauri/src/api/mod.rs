@@ -189,6 +189,7 @@ pub fn router(state: ApiState) -> Router {
         // Browser lifecycle
         .route("/api/launch/:profile_id", post(launch_profile))
         .route("/api/kill/:profile_id", post(kill_profile))
+        .route("/api/register-external", post(register_external_profile))
         .route("/api/running", get(get_running_browsers))
         // Browser control (CDP)
         .route("/api/browser/:id/navigate", post(browser_navigate))
@@ -723,12 +724,25 @@ async fn launch_profile(
         .iter()
         .find(|p| p.id == profile_id)
         .ok_or_else(|| (StatusCode::NOT_FOUND, "Profile not found".to_string()))?;
+
+    // If already running, return existing process info (attach to existing session)
     if state.process_manager.is_running(&profile_id) {
+        if let Some(info) = state.process_manager.get_process_info(&profile_id) {
+            if let Some(cdp_port) = info.cdp_port {
+                tracing::info!("Attaching to existing browser session for profile {} (pid: {}, cdp_port: {})",
+                    profile_id, info.pid, cdp_port);
+                return Ok(Json(LaunchResponse {
+                    pid: info.pid,
+                    cdp_port
+                }));
+            }
+        }
         return Err((
             StatusCode::CONFLICT,
-            "Profile is already running".to_string(),
+            "Profile is already running but CDP port is unknown".to_string(),
         ));
     }
+
     let chrome_path = get_effective_chrome_path_from_config(&config)
         .await
         .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
@@ -786,6 +800,90 @@ async fn kill_profile(
         running: false,
     });
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// Request body for registering an externally-launched browser
+#[derive(serde::Deserialize)]
+struct RegisterExternalRequest {
+    profile_id: String,
+    pid: u32,
+    cdp_port: u16,
+}
+
+async fn register_external_profile(
+    State(state): State<ApiState>,
+    Json(req): Json<RegisterExternalRequest>,
+) -> Result<Json<LaunchResponse>, (StatusCode, String)> {
+    // Verify profile exists
+    let config = state.config.read().clone();
+    let _profile = config
+        .profiles
+        .iter()
+        .find(|p| p.id == req.profile_id)
+        .ok_or_else(|| (StatusCode::NOT_FOUND, "Profile not found".to_string()))?;
+
+    // Verify CDP port is accessible
+    let url = format!("http://127.0.0.1:{}/json/version", req.cdp_port);
+    let response = reqwest::get(&url).await.map_err(|e| {
+        (StatusCode::BAD_REQUEST, format!("Failed to connect to CDP port: {}", e))
+    })?;
+
+    if !response.status().is_success() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "CDP port is not accessible or not a Chrome browser".to_string(),
+        ));
+    }
+
+    // Check if already running (prevent duplicate registration)
+    if state.process_manager.is_running(&req.profile_id) {
+        // Return existing info if it's the same profile
+        if let Some(info) = state.process_manager.get_process_info(&req.profile_id) {
+            if let Some(cdp_port) = info.cdp_port {
+                return Ok(Json(LaunchResponse {
+                    pid: info.pid,
+                    cdp_port
+                }));
+            }
+        }
+        return Err((
+            StatusCode::CONFLICT,
+            "Profile is already running with different settings".to_string(),
+        ));
+    }
+
+    // Register the external session
+    state
+        .process_manager
+        .register_external(&req.profile_id, req.pid, req.cdp_port);
+
+    // Persist session for reconnect across Tauri restarts
+    let profile_id = req.profile_id.clone();
+    let pid = req.pid;
+    let cdp_port = req.cdp_port;
+    tokio::spawn(async move {
+        if let Err(e) = crate::process::sessions_persist::save_session(&profile_id, pid, cdp_port).await {
+            tracing::warn!("Failed to persist external session for {}: {}", profile_id, e);
+        }
+    });
+
+    state.emit("browser-status-changed");
+    state.broadcast_ws(ws::WsEvent::BrowserStatusChanged {
+        profile_id: req.profile_id.clone(),
+        running: true,
+    });
+
+    tracing::info!(
+        "Registered external browser: profile={} pid={} cdp_port={}",
+        req.profile_id,
+        req.pid,
+        req.cdp_port
+    );
+
+    Ok(Json(LaunchResponse {
+        pid: req.pid,
+        cdp_port: req.cdp_port
+    }))
 }
 
 #[derive(serde::Serialize)]
