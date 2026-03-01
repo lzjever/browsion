@@ -2264,3 +2264,112 @@ async fn test_emulate_set_geolocation() {
 
     browser.kill();
 }
+
+/// 46. Workflow: execute simple workflow via API.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_workflow_execute_simple_navigate() {
+    let Some(_chrome) = find_chrome() else { eprintln!("SKIP: no Chrome"); return; };
+
+    // Use a dedicated port for the API server
+    let api_port = 39525u16;
+
+    let state = make_state();
+    let api_key = Some("test-workflow-key".to_string());
+
+    // Set Chrome path and MCP config for ProcessManager
+    {
+        let mut config = state.config.write();
+        if let Some(chrome_path) = find_chrome() {
+            config.chrome_path = Some(chrome_path);
+        }
+        // Enable MCP server (required for workflow execution)
+        config.mcp.enabled = true;
+        config.mcp.api_port = api_port;
+        config.mcp.api_key = api_key.clone();
+    }
+
+    run_server(state.clone(), api_port, api_key.clone());
+    let api_base = format!("http://127.0.0.1:{}", api_port);
+
+    let user_data_dir = std::env::temp_dir().join(format!("browsion-e2e-workflow-{}", api_port));
+    let _ = std::fs::remove_dir_all(&user_data_dir);
+    std::fs::create_dir_all(&user_data_dir).unwrap();
+    let prof_id = "workflow-test";
+
+    let profile = serde_json::json!({
+        "id": prof_id,
+        "name": "Workflow Test",
+        "description": "",
+        "user_data_dir": user_data_dir.to_str().unwrap(),
+        "lang": "en-US",
+        "tags": [],
+        "custom_args": []
+    });
+
+    let client = reqwest::Client::new();
+    let _ = client.post(format!("{}/api/profiles", api_base))
+        .header("X-API-Key", api_key.as_ref().unwrap())
+        .json(&profile)
+        .send()
+        .await
+        .expect("create profile failed");
+
+    let workflow = serde_json::json!({
+        "id": "test-workflow",
+        "name": "Test Navigate Workflow",
+        "description": "Simple navigate workflow",
+        "steps": [{
+            "id": "step-1",
+            "name": "Navigate to example.com",
+            "description": "",
+            "type": "navigate",
+            "params": {"url": "https://example.com"},
+            "continue_on_error": false,
+            "timeout_ms": 10000
+        }],
+        "variables": {},
+        "created_at": 0,
+        "updated_at": 0
+    });
+
+    let _ = client.post(format!("{}/api/workflows", api_base))
+        .header("X-API-Key", api_key.as_ref().unwrap())
+        .json(&workflow)
+        .send()
+        .await
+        .expect("create workflow failed");
+
+    // Launch browser via API
+    let launch_resp = client.post(format!("{}/api/launch/{}", api_base, prof_id))
+        .header("X-API-Key", api_key.as_ref().unwrap())
+        .send()
+        .await
+        .expect("launch failed");
+
+    assert_eq!(launch_resp.status(), 200, "launch should succeed");
+
+    // Wait for browser to start
+    tokio::time::sleep(tokio::time::Duration::from_millis(1500)).await;
+
+    let resp = client.post(format!("{}/api/workflows/test-workflow/run/{}", api_base, prof_id))
+        .header("X-API-Key", api_key.as_ref().unwrap())
+        .json(&serde_json::json!({}))
+        .send()
+        .await
+        .expect("run workflow failed");
+
+    assert_eq!(resp.status(), 200);
+
+    let body = resp.text().await.expect("response body missing");
+    let execution: serde_json::Value = serde_json::from_str(&body).expect("invalid JSON");
+    assert_eq!(execution.get("status").and_then(|v| v.as_str()), Some("completed"));
+
+    // Kill browser via API
+    let _ = client.post(format!("{}/api/kill/{}", api_base, prof_id))
+        .header("X-API-Key", api_key.as_ref().unwrap())
+        .send()
+        .await;
+
+    drop(state);
+    let _ = std::fs::remove_dir_all(&user_data_dir);
+}

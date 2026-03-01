@@ -267,6 +267,10 @@ pub fn router(state: ApiState) -> Router {
         // Cookie export/import
         .route("/api/browser/:id/cookies/export", get(browser_export_cookies))
         .route("/api/browser/:id/cookies/import", post(browser_import_cookies))
+        // Workflows
+        .route("/api/workflows", get(list_workflows).post(create_workflow))
+        .route("/api/workflows/:id", get(get_workflow).put(update_workflow).delete(delete_workflow))
+        .route("/api/workflows/:id/run/:profile_id", post(run_workflow))
         // WebSocket (real-time events)
         .route("/api/ws", axum::routing::get(ws::ws_handler))
         // Utility
@@ -301,6 +305,198 @@ fn require_cdp_port(state: &AppState, profile_id: &str) -> Result<u16, (StatusCo
 
 async fn health() -> &'static str {
     "ok"
+}
+
+// ---------------------------------------------------------------------------
+// Workflows
+// ---------------------------------------------------------------------------
+
+async fn list_workflows(
+    State(state): State<ApiState>,
+) -> Result<Json<Vec<serde_json::Value>>, (StatusCode, String)> {
+    let workflows = state.workflow_manager.list();
+    let json: Vec<serde_json::Value> = workflows
+        .into_iter()
+        .map(|w| serde_json::to_value(w).unwrap())
+        .collect();
+    Ok(Json(json))
+}
+
+async fn get_workflow(
+    AxumPath(id): AxumPath<String>,
+    State(state): State<ApiState>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    state
+        .workflow_manager
+        .get(&id)
+        .map(|w| Json(serde_json::to_value(w).unwrap()))
+        .ok_or_else(|| {
+            (
+                StatusCode::NOT_FOUND,
+                serde_json::json!({
+                    "error": "workflow_not_found",
+                    "message": format!("Workflow {} not found", id),
+                })
+                .to_string(),
+            )
+        })
+}
+
+async fn create_workflow(
+    State(state): State<ApiState>,
+    Json(workflow): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    // Parse workflow from JSON
+    let workflow: crate::workflow::schema::Workflow = serde_json::from_value(workflow.clone())
+        .map_err(|e| {
+            (
+                StatusCode::BAD_REQUEST,
+                serde_json::json!({
+                    "error": "invalid_workflow",
+                    "message": format!("Invalid workflow JSON: {}", e),
+                })
+                .to_string(),
+            )
+        })?;
+
+    // Save workflow
+    state
+        .workflow_manager
+        .save(workflow.clone())
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                serde_json::json!({
+                    "error": "save_failed",
+                    "message": format!("Failed to save workflow: {}", e),
+                })
+                .to_string(),
+            )
+        })?;
+
+    Ok(Json(serde_json::to_value(workflow).unwrap()))
+}
+
+async fn update_workflow(
+    AxumPath(id): AxumPath<String>,
+    State(state): State<ApiState>,
+    Json(workflow): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    // Parse workflow from JSON
+    let mut workflow: crate::workflow::schema::Workflow = serde_json::from_value(workflow.clone())
+        .map_err(|e| {
+            (
+                StatusCode::BAD_REQUEST,
+                serde_json::json!({
+                    "error": "invalid_workflow",
+                    "message": format!("Invalid workflow JSON: {}", e),
+                })
+                .to_string(),
+            )
+        })?;
+
+    // Ensure ID matches path
+    workflow.id = id.clone();
+
+    // Check if workflow exists
+    if state.workflow_manager.get(&id).is_none() {
+        return Err((
+            StatusCode::NOT_FOUND,
+            serde_json::json!({
+                "error": "workflow_not_found",
+                "message": format!("Workflow {} not found", id),
+            })
+            .to_string(),
+        ));
+    }
+
+    // Save workflow
+    state
+        .workflow_manager
+        .save(workflow.clone())
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                serde_json::json!({
+                    "error": "save_failed",
+                    "message": format!("Failed to save workflow: {}", e),
+                })
+                .to_string(),
+            )
+        })?;
+
+    Ok(Json(serde_json::to_value(workflow).unwrap()))
+}
+
+async fn delete_workflow(
+    AxumPath(id): AxumPath<String>,
+    State(state): State<ApiState>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    state
+        .workflow_manager
+        .delete(&id)
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                serde_json::json!({
+                    "error": "delete_failed",
+                    "message": format!("Failed to delete workflow: {}", e),
+                })
+                .to_string(),
+            )
+        })?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn run_workflow(
+    AxumPath((workflow_id, profile_id)): AxumPath<(String, String)>,
+    State(state): State<ApiState>,
+    Json(variables): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    // Get workflow
+    let workflow = state
+        .workflow_manager
+        .get(&workflow_id)
+        .ok_or_else(|| {
+            (
+                StatusCode::NOT_FOUND,
+                serde_json::json!({
+                    "error": "workflow_not_found",
+                    "message": format!("Workflow {} not found", workflow_id),
+                })
+                .to_string(),
+            )
+        })?;
+
+    // Parse variables
+    let variables: std::collections::HashMap<String, serde_json::Value> =
+        serde_json::from_value(variables).unwrap_or_default();
+
+    // Get API config
+    let config = state.config.read().clone();
+    let mcp = config.mcp.clone();
+    if !mcp.enabled {
+        return Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            serde_json::json!({
+                "error": "api_not_enabled",
+                "message": "API server not enabled",
+            })
+            .to_string(),
+        ));
+    }
+
+    // Create executor
+    let executor = crate::workflow::WorkflowExecutor::new(
+        state.session_manager.clone(),
+        mcp.api_port,
+        mcp.api_key.clone(),
+    );
+
+    // Execute workflow
+    let execution = executor.execute(&workflow, profile_id, variables).await;
+
+    Ok(Json(serde_json::to_value(execution).unwrap()))
 }
 
 // ---------------------------------------------------------------------------
