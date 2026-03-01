@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { ProfileList } from './components/ProfileList';
 import { ProfileForm } from './components/ProfileForm';
 import { Settings } from './components/Settings';
@@ -19,7 +19,7 @@ function App() {
   const [profiles, setProfiles] = useState<BrowserProfile[]>([]);
 
   // Load profiles on mount
-  useState(() => {
+  useEffect(() => {
     const loadProfiles = async () => {
       try {
         const { tauriApi } = await import('./api/tauri');
@@ -30,7 +30,7 @@ function App() {
       }
     };
     loadProfiles();
-  });
+  }, []);
 
   const handleAddProfile = () => {
     setEditingProfile(undefined);
