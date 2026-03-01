@@ -2373,3 +2373,80 @@ async fn test_workflow_execute_simple_navigate() {
     drop(state);
     let _ = std::fs::remove_dir_all(&user_data_dir);
 }
+
+/// 47. Recording: start, check status, stop recording via API.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_recording_lifecycle_via_api() {
+    let chrome = find_chrome().expect("Chrome required");
+    let port = allocate_cdp_port();
+
+    let state = make_state();
+    let api_key = Some("test-recording-key".to_string());
+    run_server(state.clone(), port, api_key.clone());
+    let api_base = format!("http://127.0.0.1:{}/api", port);
+
+    let user_data_dir = std::env::temp_dir().join("browsion-e2e-recording");
+    std::fs::create_dir_all(&user_data_dir).unwrap();
+    let prof_id = "recording-test";
+
+    let profile = serde_json::json!({
+        "id": prof_id,
+        "name": "Recording Test",
+        "description": "",
+        "user_data_dir": user_data_dir.to_str().unwrap(),
+        "lang": "en-US",
+        "tags": [],
+        "custom_args": []
+    });
+
+    let client = reqwest::Client::new();
+    let _ = client.post(format!("{}/profiles", api_base))
+        .header("X-API-Key", api_key.as_ref().unwrap())
+        .json(&profile)
+        .send()
+        .await
+        .expect("create profile failed");
+
+    let mut child = Command::new(&chrome)
+        .arg(format!("--user-data-dir={}", user_data_dir.display()))
+        .arg(format!("--remote-debugging-port={}", port))
+        .arg("--headless=new")
+        .spawn()
+        .expect("Failed to start Chrome");
+
+    tokio::time::sleep(tokio::time::Duration::from_millis(1500)).await;
+
+    let resp = client.post(format!("{}/recordings/start/{}", api_base, prof_id))
+        .header("X-API-Key", api_key.as_ref().unwrap())
+        .send()
+        .await
+        .expect("start recording failed");
+
+    assert_eq!(resp.status(), 200);
+    let body = resp.text().await.expect("response body missing");
+    let start_resp: serde_json::Value = serde_json::from_str(&body).expect("invalid JSON");
+    let session_id = start_resp.get("session_id").and_then(|v| v.as_str()).expect("session_id missing");
+
+    let resp = client.get(format!("{}/profiles/{}/recording-status", api_base, prof_id))
+        .header("X-API-Key", api_key.as_ref().unwrap())
+        .send()
+        .await
+        .expect("get recording status failed");
+
+    assert_eq!(resp.status(), 200);
+    let body = resp.text().await.expect("response body missing");
+    let status: serde_json::Value = serde_json::from_str(&body).expect("invalid JSON");
+    assert_eq!(status.get("is_recording").and_then(|v| v.as_bool()), Some(true));
+
+    let resp = client.post(format!("{}/recordings/stop/{}", api_base, session_id))
+        .header("X-API-Key", api_key.as_ref().unwrap())
+        .send()
+        .await
+        .expect("stop recording failed");
+
+    assert_eq!(resp.status(), 200);
+
+    drop(state);
+    child.kill().expect("Failed to kill Chrome");
+    let _ = child.wait();
+}

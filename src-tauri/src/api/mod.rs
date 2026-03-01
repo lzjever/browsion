@@ -271,6 +271,10 @@ pub fn router(state: ApiState) -> Router {
         .route("/api/workflows", get(list_workflows).post(create_workflow))
         .route("/api/workflows/:id", get(get_workflow).put(update_workflow).delete(delete_workflow))
         .route("/api/workflows/:id/run/:profile_id", post(run_workflow))
+        // Recordings
+        .route("/api/recordings/start/:profile_id", post(start_recording))
+        .route("/api/recordings/stop/:session_id", post(stop_recording))
+        .route("/api/profiles/:id/recording-status", get(get_recording_status))
         // WebSocket (real-time events)
         .route("/api/ws", axum::routing::get(ws::ws_handler))
         // Utility
@@ -497,6 +501,98 @@ async fn run_workflow(
     let execution = executor.execute(&workflow, profile_id, variables).await;
 
     Ok(Json(serde_json::to_value(execution).unwrap()))
+}
+
+// ---------------------------------------------------------------------------
+// Recordings
+// ---------------------------------------------------------------------------
+
+async fn start_recording(
+    AxumPath(profile_id): AxumPath<String>,
+    State(state): State<ApiState>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let session_id = state
+        .recording_session_manager
+        .start_session(profile_id.clone())
+        .map_err(|e| {
+            (
+                StatusCode::BAD_REQUEST,
+                serde_json::json!({
+                    "error": "start_recording_failed",
+                    "message": e,
+                })
+                .to_string(),
+            )
+        })?;
+
+    // Emit event for UI update
+    state.emit("recording-status-changed");
+
+    Ok(Json(serde_json::json!({ "session_id": session_id })))
+}
+
+async fn stop_recording(
+    AxumPath(session_id): AxumPath<String>,
+    State(state): State<ApiState>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    // Find the profile_id for this session
+    let active_sessions = state.recording_session_manager.get_active_sessions();
+    let profile_id = active_sessions
+        .iter()
+        .find(|(_, sid)| *sid == &session_id)
+        .map(|(pid, _)| pid.clone());
+
+    let profile_id = profile_id.ok_or_else(|| {
+        (
+            StatusCode::NOT_FOUND,
+            serde_json::json!({
+                "error": "session_not_found",
+                "message": format!("Recording session {} not found", session_id),
+            })
+            .to_string(),
+        )
+    })?;
+
+    let recording = state
+        .recording_session_manager
+        .stop_session(&profile_id)
+        .map_err(|e| {
+            (
+                StatusCode::BAD_REQUEST,
+                serde_json::json!({
+                    "error": "stop_recording_failed",
+                    "message": e,
+                })
+                .to_string(),
+            )
+        })?;
+
+    // Emit event for UI update
+    state.emit("recording-status-changed");
+
+    Ok(Json(serde_json::to_value(recording).unwrap()))
+}
+
+async fn get_recording_status(
+    AxumPath(id): AxumPath<String>,
+    State(state): State<ApiState>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let info = state
+        .recording_session_manager
+        .get_session_info(&id);
+
+    match info {
+        Some(info) => Ok(Json(serde_json::json!({
+            "is_recording": info.is_recording,
+            "session_id": info.id,
+            "action_count": info.action_count,
+        }))),
+        None => Ok(Json(serde_json::json!({
+            "is_recording": false,
+            "session_id": serde_json::Value::Null,
+            "action_count": 0,
+        }))),
+    }
 }
 
 // ---------------------------------------------------------------------------
