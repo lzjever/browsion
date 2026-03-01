@@ -562,18 +562,20 @@ async fn test_api_action_log_entries_have_expected_shape() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-async fn test_profile_snapshots_list_ghost() {
+async fn test_profile_snapshots_list_unknown_profile() {
     let app = make_app_no_auth();
     let req = axum::http::Request::builder()
         .uri("/api/profiles/ghost-profile/snapshots")
         .body(axum::body::Body::empty())
         .unwrap();
     let res = app.oneshot(req).await.unwrap();
-    // Should not panic — either OK with empty array or server error
-    let status = res.status();
-    assert!(
-        status.is_success() || status.is_server_error(),
-        "Expected 2xx or 5xx, got {}",
-        status
-    );
+    // core_list_snapshots reads the manifest file; when none exists it returns
+    // an empty HashMap (not an error), so the handler always returns 200 OK
+    // with an empty JSON array for an unknown profile.
+    assert_eq!(res.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(res.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let infos: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
+    assert!(infos.is_empty());
 }
