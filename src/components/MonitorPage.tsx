@@ -123,17 +123,20 @@ export const MonitorPage: React.FC = () => {
         if (res.ok) {
           const data = await res.json();
           if (data.screenshot) {
-            // Also grab URL + title
+            // Also grab URL + title in parallel
             let url = '';
             let title = '';
             try {
-              const pageRes = await fetch(`${base}/api/browser/${id}/url`, { headers });
-              if (pageRes.ok) {
+              const [pageRes, titleRes] = await Promise.all([
+                fetch(`${base}/api/browser/${id}/url`, { headers }).catch(() => null),
+                fetch(`${base}/api/browser/${id}/title`, { headers }).catch(() => null),
+              ]);
+
+              if (pageRes?.ok) {
                 const d = await pageRes.json();
                 url = d.url || '';
               }
-              const titleRes = await fetch(`${base}/api/browser/${id}/title`, { headers });
-              if (titleRes.ok) {
+              if (titleRes?.ok) {
                 const d = await titleRes.json();
                 title = d.title || '';
               }
@@ -218,7 +221,19 @@ export const MonitorPage: React.FC = () => {
     input.accept = format === 'json' ? '.json' : '.txt';
     input.onchange = async () => {
       const file = input.files?.[0];
-      if (!file) return;
+      if (!file) {
+        document.body.removeChild(input);
+        return;
+      }
+
+      // Check file size (10MB limit)
+      const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB in bytes
+      if (file.size > MAX_FILE_SIZE) {
+        document.body.removeChild(input);
+        showToast('File too large. Maximum size is 10MB.', 'error');
+        return;
+      }
+
       const data = await file.text();
       const headers: Record<string, string> = {
         'Content-Type': 'application/json',
@@ -238,8 +253,11 @@ export const MonitorPage: React.FC = () => {
         showToast(msg, result.errors?.length ? 'warning' : 'success');
       } catch (e) {
         showToast(`Import failed: ${e}`, 'error');
+      } finally {
+        document.body.removeChild(input);
       }
     };
+    document.body.appendChild(input);
     input.click();
   };
 
