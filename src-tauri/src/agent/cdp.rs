@@ -107,6 +107,8 @@ pub struct CDPClient {
     msg_id: Arc<Mutex<u32>>,
     /// CDP port being used
     cdp_port: u16,
+    /// Whether manual recording is active (for auto-reinject on page load)
+    is_recording: Arc<Mutex<bool>>,
 }
 
 impl CDPClient {
@@ -130,6 +132,7 @@ impl CDPClient {
             current_url: Arc::new(Mutex::new(String::new())),
             msg_id: Arc::new(Mutex::new(1)),
             cdp_port: crate::process::port::allocate_cdp_port(),
+            is_recording: Arc::new(Mutex::new(false)),
         }
     }
 
@@ -155,6 +158,7 @@ impl CDPClient {
             current_url: Arc::new(Mutex::new(String::new())),
             msg_id: Arc::new(Mutex::new(1)),
             cdp_port,
+            is_recording: Arc::new(Mutex::new(false)),
         };
         client.connect_websocket().await?;
         Ok(client)
@@ -324,8 +328,10 @@ impl CDPClient {
         let tab_registry = self.tab_registry.clone();
         let intercept_rules = self.intercept_rules.clone();
         let frame_contexts_clone = self.frame_contexts.clone();
+        let is_recording_for_reader = self.is_recording.clone();
         let ws_tx_for_reader = ws_tx_arc.clone();
         let msg_id_for_reader = self.msg_id.clone();
+        let _profile_id_for_reader = self.profile_id.clone();
 
         tokio::spawn(async move {
             while let Some(msg) = StreamExt::next(&mut rx).await {
@@ -502,6 +508,123 @@ impl CDPClient {
                                             "timestamp": timestamp,
                                             "source": source
                                         }));
+                                    }
+                                    // ── Page: navigation events for auto-reinject ──
+                                    "Page.loadEventFired" => {
+                                        // Check if we need to re-inject recording listeners
+                                        let is_recording = is_recording_for_reader.lock().await;
+                                        if *is_recording {
+                                            tracing::info!("Page loaded, re-injecting recording listeners");
+                                            // Re-inject listeners by sending Runtime.evaluate command
+                                            let script = r#"
+                                                (function() {
+                                                    if (window.__browsion_recording__) return;
+                                                    window.__browsion_recording__ = true;
+
+                                                    function getSelector(el) {
+                                                        if (el.id) return '#' + el.id;
+                                                        if (el.className) {
+                                                            const classes = el.className.split(' ').filter(c => c).join('.');
+                                                            if (classes) return '.' + classes;
+                                                        }
+                                                        const path = [];
+                                                        while (el && el.nodeType === Node.ELEMENT_NODE) {
+                                                            let selector = el.nodeName.toLowerCase();
+                                                            if (el.id) {
+                                                                selector += '#' + el.id;
+                                                                path.unshift(selector);
+                                                                break;
+                                                            } else {
+                                                                let sibling = el;
+                                                                let nth = 1;
+                                                                while (sibling = sibling.previousElementSibling) {
+                                                                    if (sibling.nodeName === el.nodeName) nth++;
+                                                                }
+                                                                if (nth !== 1) selector += `:nth-of-type(${nth})`;
+                                                            }
+                                                            path.unshift(selector);
+                                                            el = el.parentElement;
+                                                        }
+                                                        return path.join(' > ');
+                                                    }
+
+                                                    function recordEvent(type, data) {
+                                                        console.log('__BROWSION_EVENT__', JSON.stringify({
+                                                            type: type,
+                                                            data: data,
+                                                            timestamp: Date.now()
+                                                        }));
+                                                    }
+
+                                                    document.addEventListener('click', (e) => {
+                                                        const selector = getSelector(e.target);
+                                                        recordEvent('click', {
+                                                            selector: selector,
+                                                            x: e.clientX,
+                                                            y: e.clientY
+                                                        });
+                                                    }, true);
+
+                                                    document.addEventListener('input', (e) => {
+                                                        const selector = getSelector(e.target);
+                                                        const value = e.target.value || '';
+                                                        recordEvent('input', {
+                                                            selector: selector,
+                                                            value: value
+                                                        });
+                                                    }, true);
+
+                                                    document.addEventListener('change', (e) => {
+                                                        const selector = getSelector(e.target);
+                                                        let value;
+                                                        if (e.target.type === 'checkbox') {
+                                                            value = e.target.checked;
+                                                        } else if (e.target.type === 'radio') {
+                                                            value = e.target.checked ? e.target.value : null;
+                                                        } else {
+                                                            value = e.target.value;
+                                                        }
+                                                        recordEvent('change', {
+                                                            selector: selector,
+                                                            value: value
+                                                        });
+                                                    }, true);
+
+                                                    document.addEventListener('keydown', (e) => {
+                                                        if (e.ctrlKey || e.altKey || e.metaKey || e.key === 'Enter' || e.key === 'Tab' || e.key === 'Escape') {
+                                                            recordEvent('keydown', {
+                                                                key: e.key,
+                                                                ctrlKey: e.ctrlKey,
+                                                                altKey: e.altKey,
+                                                                shiftKey: e.shiftKey,
+                                                                metaKey: e.metaKey
+                                                            });
+                                                        }
+                                                    }, true);
+
+                                                    console.log('__BROWSION_READY__');
+                                                })();
+                                            "#;
+                                            // Send Runtime.evaluate command
+                                            let mid = {
+                                                let mut m = msg_id_for_reader.lock().await;
+                                                *m += 1;
+                                                *m
+                                            };
+                                            let cmd = serde_json::json!({
+                                                "id": mid,
+                                                "method": "Runtime.evaluate",
+                                                "params": {
+                                                    "expression": script,
+                                                    "returnByValue": true,
+                                                    "awaitPromise": true
+                                                },
+                                                "sessionId": session_id
+                                            });
+                                            if let Ok(_) = ws_tx_for_reader.lock().await.send(WsMessage::Text(cmd.to_string())).await {
+                                                tracing::info!("Recording listeners re-injected successfully");
+                                            }
+                                        }
                                     }
                                     // ── Console: Runtime.exceptionThrown ───────
                                     "Runtime.exceptionThrown" => {
@@ -2948,10 +3071,16 @@ impl CDPClient {
     pub async fn start_manual_recording(&self) -> Result<(), String> {
         tracing::info!("Starting manual recording for profile {}", self.profile_id);
 
+        // Set recording flag
+        *self.is_recording.lock().await = true;
+
         let script = r#"
             (function() {
                 // Avoid duplicate listeners
-                if (window.__browsion_recording__) return;
+                if (window.__browsion_recording__) {
+                    console.log('__BROWSION_ALREADY_ACTIVE__');
+                    return;
+                }
                 window.__browsion_recording__ = true;
 
                 // Helper to get a unique selector for an element
@@ -3053,6 +3182,9 @@ impl CDPClient {
 
     /// Stop manual recording by removing the event listeners.
     pub async fn stop_manual_recording(&self) -> Result<(), String> {
+        // Clear recording flag
+        *self.is_recording.lock().await = false;
+
         let script = r#"
             (function() {
                 if (!window.__browsion_recording__) return;
