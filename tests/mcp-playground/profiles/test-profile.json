@@ -1,0 +1,20 @@
+{
+  "id": "mcp-test-profile",
+  "name": "MCP 测试环境",
+  "description": "使用 Claude Code 测试 Browsion MCP 功能的专用 profile，配置了代理服务器 192.168.0.220:8889",
+  "user_data_dir": "/home/percy/.browsion/mcp-test-profile",
+  "lang": "zh-CN",
+  "proxy_server": "http://192.168.0.220:8889",
+  "timezone": "Asia/Shanghai",
+  "fingerprint": "mcp-test-20240301",
+  "tags": [
+    "mcp",
+    "test",
+    "automation",
+    "claude-code"
+  ],
+  "custom_args": [
+    "--disable-web-security",
+    "--disable-features=VizDisplayCompositor"
+  ]
+}

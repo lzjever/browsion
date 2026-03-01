@@ -1,0 +1,9 @@
+{
+  "browsion": {
+    "command": "/home/percy/works/browsion/src-tauri/target/debug/browsion-mcp",
+    "args": [],
+    "env": {
+      "BROWSION_API_PORT": "38472"
+    }
+  }
+}
