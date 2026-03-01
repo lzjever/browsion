@@ -99,9 +99,30 @@ pub async fn start_recording(
     profile_id: String,
     state: tauri::State<'_, Arc<AppState>>,
 ) -> Result<String, String> {
+    tracing::info!("Starting recording for profile {}", profile_id);
+
     let session_id = state
         .recording_session_manager
         .start_session(profile_id.clone())?;
+
+    // Start manual recording by injecting JS listeners
+    if let Some(cdp_port) = state.process_manager.get_cdp_port(&profile_id) {
+        tracing::info!("Got CDP port: {}", cdp_port);
+        match state.session_manager.get_client(&profile_id, cdp_port).await {
+            Ok(handle) => {
+                let client = handle.lock().await;
+                match client.start_manual_recording().await {
+                    Ok(_) => tracing::info!("Manual recording listeners injected successfully"),
+                    Err(e) => tracing::error!("Failed to inject recording listeners: {}", e),
+                }
+            }
+            Err(e) => {
+                tracing::error!("Failed to get CDP client: {}", e);
+            }
+        }
+    } else {
+        tracing::warn!("No CDP port found for profile {}", profile_id);
+    }
 
     // Emit event for UI update
     state.emit("recording-status-changed");
@@ -117,6 +138,69 @@ pub async fn stop_recording(
     description: String,
     state: tauri::State<'_, Arc<AppState>>,
 ) -> Result<Recording, String> {
+    tracing::info!("Stopping recording for profile {}", profile_id);
+
+    // Extract manual recording events from console log before stopping
+    if let Some(cdp_port) = state.process_manager.get_cdp_port(&profile_id) {
+        tracing::info!("Extracting events from console log");
+        match state.session_manager.get_client(&profile_id, cdp_port).await {
+            Ok(handle) => {
+                let client = handle.lock().await;
+
+                // First, extract manual recording events from console log
+                let console_log = client.get_console_log().await;
+                tracing::info!("Extracting events from {} console log entries", console_log.len());
+
+                let mut event_count = 0;
+                for entry in &console_log {
+                    if let Some(args) = entry.get("args").and_then(|a| a.as_array()) {
+                        if args.len() >= 2 && args[0] == "__BROWSION_EVENT__" {
+                            tracing::info!("Found BROWSION event: args[1] = {}", args[1]);
+                            if args[1].is_string() {
+                                let event_str = args[1].as_str().unwrap_or("");
+                                if let Ok(event_data) = serde_json::from_str::<serde_json::Value>(event_str) {
+                                    tracing::info!("Parsed event data: {:?}", event_data);
+                                    if let (Some(event_type), Some(data)) = (
+                                        event_data.get("type").and_then(|t| t.as_str()),
+                                        event_data.get("data")
+                                    ) {
+                                        let action_type = match event_type {
+                                            "click" => Some(crate::recording::RecordedActionType::Click),
+                                            "input" => Some(crate::recording::RecordedActionType::Type),
+                                            "change" => Some(crate::recording::RecordedActionType::Type),
+                                            "keydown" => Some(crate::recording::RecordedActionType::PressKey),
+                                            _ => None,
+                                        };
+
+                                        if let Some(at) = action_type {
+                                            match state.recording_session_manager.add_action(
+                                                &profile_id,
+                                                at,
+                                                data.clone(),
+                                            ) {
+                                                Ok(_) => event_count += 1,
+                                                Err(e) => tracing::error!("Failed to add action: {}", e),
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                tracing::info!("Extracted {} manual recording events", event_count);
+
+                // Now stop the recording (this will send __BROWSION_STOPPED__)
+                let _ = client.stop_manual_recording().await;
+            }
+            Err(e) => {
+                tracing::error!("Failed to get CDP client: {}", e);
+            }
+        }
+    } else {
+        tracing::warn!("No CDP port found for profile {}", profile_id);
+    }
+
     let mut recording = state
         .recording_session_manager
         .stop_session(&profile_id)?;

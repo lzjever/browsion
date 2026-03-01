@@ -486,11 +486,23 @@ async fn start_recording(
         })?;
 
     // Start manual recording by injecting JS listeners
+    tracing::info!("Starting manual recording for profile {}", profile_id);
     if let Some(cdp_port) = state.process_manager.get_cdp_port(&profile_id) {
-        if let Ok(handle) = state.session_manager.get_client(&profile_id, cdp_port).await {
-            let client = handle.lock().await;
-            let _ = client.start_manual_recording().await;
+        tracing::info!("Got CDP port: {}", cdp_port);
+        match state.session_manager.get_client(&profile_id, cdp_port).await {
+            Ok(handle) => {
+                let client = handle.lock().await;
+                match client.start_manual_recording().await {
+                    Ok(_) => tracing::info!("Manual recording listeners injected successfully"),
+                    Err(e) => tracing::error!("Failed to inject recording listeners: {}", e),
+                }
+            }
+            Err(e) => {
+                tracing::error!("Failed to get CDP client: {}", e);
+            }
         }
+    } else {
+        tracing::warn!("No CDP port found for profile {}", profile_id);
     }
 
     // Emit event for UI update
