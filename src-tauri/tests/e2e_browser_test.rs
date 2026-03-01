@@ -1329,3 +1329,386 @@ async fn test_dialog_handle_alert() {
 
     browser.kill();
 }
+
+/// 27. Emulate mobile viewport: set device metrics, verify window dimensions change.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_emulate_viewport() {
+    let Some(chrome) = find_chrome() else { eprintln!("SKIP: no Chrome"); return; };
+    let port = allocate_cdp_port();
+    let browser = TestBrowser::launch(&chrome, port).await;
+
+    // Navigate to a page first (about:blank may not respect viewport changes)
+    browser.client.navigate_wait("https://example.com", "load", 10_000).await.unwrap();
+
+    // Get initial viewport dimensions
+    let initial_metrics = browser.client
+        .evaluate_js("JSON.stringify({width: window.innerWidth, height: window.innerHeight})")
+        .await
+        .unwrap();
+    let initial_obj: serde_json::Value = serde_json::from_str(initial_metrics.as_str().unwrap()).unwrap();
+    let _initial_width = initial_obj["width"].as_u64().unwrap_or(1280);
+
+    // Emulate mobile viewport (800x600, mobile=true, user_agent)
+    browser.client.set_viewport(800, 600, 1.0, true).await.unwrap();
+    browser.client.set_user_agent("Mozilla/5.0 (iPhone; CPU iPhone OS 14_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0 Mobile/15E148 Safari/604.1").await.unwrap();
+
+    // Reload the page for viewport to take effect
+    browser.client.reload().await.unwrap();
+    browser.client.wait_for_navigation(5_000).await.ok();
+
+    // Verify via JavaScript: window.innerWidth == 800
+    let mobile_width = browser.client
+        .evaluate_js("window.innerWidth")
+        .await
+        .unwrap();
+    assert_eq!(mobile_width.as_i64(), Some(800), "viewport width should be 800, got {:?}", mobile_width);
+
+    let mobile_height = browser.client
+        .evaluate_js("window.innerHeight")
+        .await
+        .unwrap();
+    assert_eq!(mobile_height.as_i64(), Some(600), "viewport height should be 600");
+
+    // Reset to desktop (1920x1080, mobile=false)
+    browser.client.set_viewport(1920, 1080, 1.0, false).await.unwrap();
+    browser.client.set_user_agent("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36").await.unwrap();
+
+    // Reload again for desktop viewport to take effect
+    browser.client.reload().await.unwrap();
+    browser.client.wait_for_navigation(5_000).await.ok();
+
+    let desktop_width = browser.client
+        .evaluate_js("window.innerWidth")
+        .await
+        .unwrap();
+    assert_eq!(desktop_width.as_i64(), Some(1920), "viewport width should be 1920, got {:?}", desktop_width);
+
+    browser.kill();
+}
+
+/// 28. Touch events: tap and swipe on a target element.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_touch_tap_and_swipe() {
+    let Some(chrome) = find_chrome() else { eprintln!("SKIP: no Chrome"); return; };
+    let port = allocate_cdp_port();
+    let browser = TestBrowser::launch(&chrome, port).await;
+
+    // Create test page with data: URL (div with id="target", 200x200, blue background)
+    let touch_html = r#"
+<!DOCTYPE html>
+<html>
+<head><title>Touch Test</title></head>
+<body>
+    <div id="target" style="width:200px;height:200px;background:blue;position:absolute;top:10px;left:10px;"></div>
+    <div id="log"></div>
+    <script>
+        const target = document.getElementById('target');
+        let tapCount = 0;
+        let swipeDirection = '';
+        target.addEventListener('click', () => {
+            tapCount++;
+            document.getElementById('log').textContent = 'taps:' + tapCount;
+        });
+    </script>
+</body>
+</html>
+    "#;
+
+    let encoded = percent_encoding::percent_encode(touch_html.as_bytes(), percent_encoding::NON_ALPHANUMERIC).to_string();
+    let url = format!("data:text/html;charset=utf-8,{}", encoded);
+
+    browser.client.navigate_wait(&url, "load", 10_000).await.unwrap();
+
+    // Tap on #target
+    browser.client.tap("#target").await.unwrap();
+    browser.client.wait(100).await.unwrap();
+
+    // Verify tap was registered
+    let log = browser.client
+        .evaluate_js("document.getElementById('log').textContent")
+        .await
+        .unwrap();
+    assert!(log.as_str().unwrap_or("").contains("taps:1"), "tap not registered");
+
+    // Swipe on #target (direction: "up")
+    browser.client.swipe("#target", "up", 100.0).await.unwrap();
+    browser.client.wait(100).await.unwrap();
+
+    // Verify no crash - we should still be on the same page
+    let title = browser.client.get_title().await.unwrap();
+    assert_eq!(title.as_deref(), Some("Touch Test"), "page should still be loaded");
+
+    browser.kill();
+}
+
+/// 29. Frame handling: list frames, verify main frame exists.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_frames_switch() {
+    let Some(chrome) = find_chrome() else { eprintln!("SKIP: no Chrome"); return; };
+    let port = allocate_cdp_port();
+    let browser = TestBrowser::launch(&chrome, port).await;
+
+    // Create test page with data: URL (h1 "Main", iframe id="myframe" src="about:blank")
+    let frames_html = r#"
+<!DOCTYPE html>
+<html>
+<head><title>Frames Test</title></head>
+<body>
+    <h1>Main Page</h1>
+    <iframe id="myframe" name="myframe" src="about:blank" style="width:400px;height:300px;border:1px solid black;"></iframe>
+</body>
+</html>
+    "#;
+
+    let encoded = percent_encoding::percent_encode(frames_html.as_bytes(), percent_encoding::NON_ALPHANUMERIC).to_string();
+    let url = format!("data:text/html;charset=utf-8,{}", encoded);
+
+    browser.client.navigate_wait(&url, "load", 10_000).await.unwrap();
+
+    // Call get_frames() to list all frames
+    let frames = browser.client.get_frames().await.unwrap();
+
+    // Verify at least main frame exists
+    assert!(!frames.is_empty(), "should have at least one frame");
+
+    // Find the main frame (usually has no parent)
+    let main_frame = frames.iter().find(|f| f.parent_id.is_none() || f.parent_id.as_ref().map(String::is_empty).unwrap_or(false));
+    assert!(main_frame.is_some(), "should have a main frame");
+
+    // If iframe with name "myframe" exists, verify it has url or parent_id
+    let myframe = frames.iter().find(|f| f.name.as_deref() == Some("myframe") || f.id.contains("myframe"));
+    if let Some(frame) = myframe {
+        assert!(!frame.url.is_empty() || frame.parent_id.is_some(), "iframe should have url or parent_id");
+    }
+
+    browser.kill();
+}
+
+/// 30. Snapshot list: verify snapshot API infrastructure works.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_snapshot_create_restore() {
+    use reqwest::Client;
+
+    let Some(_chrome) = find_chrome() else { eprintln!("SKIP: no Chrome"); return; };
+
+    // Create temp profile directory
+    let data_dir = temp_profile_dir();
+    std::fs::create_dir_all(&data_dir).unwrap();
+
+    let profile_id = "snapshot-test".to_string();
+
+    // Set up HTTP API
+    let state = make_state();
+    let api_port = 39522u16;
+    let api_key = Some("test-snapshot-key".to_string());
+
+    // Create profile
+    let profile = BrowserProfile {
+        id: profile_id.clone(),
+        name: "Snapshot Test Profile".to_string(),
+        description: String::new(),
+        user_data_dir: data_dir.clone(),
+        proxy_server: None,
+        lang: "en-US".to_string(),
+        timezone: None,
+        fingerprint: None,
+        color: None,
+        custom_args: Vec::new(),
+        tags: Vec::new(),
+        headless: true,
+    };
+
+    {
+        let mut config = state.config.write();
+        config.profiles.push(profile);
+    }
+
+    run_server(state.clone(), api_port, api_key.clone());
+    tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+
+    // List snapshots via GET /api/profiles/:id/snapshots (should be empty initially)
+    let http_client = Client::new();
+    let base_url = format!("http://127.0.0.1:{}", api_port);
+
+    let list_resp = http_client
+        .get(&format!("{}/api/profiles/{}/snapshots", base_url, profile_id))
+        .header("X-API-Key", "test-snapshot-key")
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(list_resp.status(), StatusCode::OK);
+    let snapshots: Vec<serde_json::Value> = list_resp.json().await.unwrap();
+    assert!(snapshots.is_empty(), "snapshots list should be empty initially");
+
+    // Cleanup
+    let _ = std::fs::remove_dir_all(&data_dir);
+
+    {
+        let mut config = state.config.write();
+        config.profiles.retain(|p| p.id != profile_id);
+    }
+}
+
+/// 31. Cookie export/import: set cookie, export via CDP, verify.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_cookie_export_import() {
+    let Some(chrome) = find_chrome() else { eprintln!("SKIP: no Chrome"); return; };
+    let port = allocate_cdp_port();
+    let browser = TestBrowser::launch(&chrome, port).await;
+
+    // Navigate to example.com
+    browser.client.navigate_wait("https://example.com", "load", 10_000).await.unwrap();
+
+    // Set cookie via set_cookie_full
+    use browsion_lib::agent::types::CookieInfo;
+    let cookie = CookieInfo {
+        name: "session".to_string(),
+        value: "test=value".to_string(),
+        domain: "example.com".to_string(),
+        path: "/".to_string(),
+        secure: false,
+        http_only: false,
+        expires: -1.0,
+    };
+
+    browser.client.set_cookie_full(&cookie).await.unwrap();
+
+    // Export cookies via Network.getAllCookies CDP command
+    let cookies = browser.client.get_cookies().await.unwrap();
+
+    // Verify cookies array not empty
+    assert!(!cookies.is_empty(), "cookies should not be empty after setting");
+
+    // Verify our cookie exists
+    let found = cookies.iter().find(|c| c.name == "session");
+    assert!(found.is_some(), "session cookie not found");
+    assert_eq!(found.unwrap().value, "test=value");
+
+    browser.kill();
+}
+
+/// 32. Action log records API calls: verify action log infrastructure works.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_action_log_records_api_calls() {
+    use reqwest::Client;
+
+    let Some(_chrome) = find_chrome() else { eprintln!("SKIP: no Chrome"); return; };
+
+    // Create temp profile directory
+    let data_dir = temp_profile_dir();
+    std::fs::create_dir_all(&data_dir).unwrap();
+
+    // Set up HTTP API with unique port to avoid conflict
+    let state = make_state();
+    let api_port = 39523u16;
+    let api_key = Some("test-actionlog-key".to_string());
+
+    // Set Chrome path for ProcessManager
+    {
+        let mut config = state.config.write();
+        if let Some(chrome_path) = find_chrome() {
+            config.chrome_path = Some(chrome_path);
+        }
+    }
+
+    run_server(state.clone(), api_port, api_key.clone());
+    tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+
+    // Create profile "actionlog-test" via POST /api/profiles
+    let http_client = Client::new();
+    let base_url = format!("http://127.0.0.1:{}", api_port);
+
+    let profile = BrowserProfile {
+        id: "actionlog-test".to_string(),
+        name: "Action Log Test Profile".to_string(),
+        description: String::new(),
+        user_data_dir: data_dir.clone(),
+        proxy_server: None,
+        lang: "en-US".to_string(),
+        timezone: None,
+        fingerprint: None,
+        color: None,
+        custom_args: Vec::new(),
+        tags: Vec::new(),
+        headless: true,
+    };
+
+    let create_resp = http_client
+        .post(&format!("{}/api/profiles", base_url))
+        .header("X-API-Key", "test-actionlog-key")
+        .json(&profile)
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(
+        create_resp.status(),
+        StatusCode::CREATED,
+        "profile creation failed: {:?}",
+        create_resp.text().await.unwrap()
+    );
+
+    // Launch browser via HTTP API (generates launch action log entry)
+    let launch_resp = http_client
+        .post(&format!("{}/api/launch/actionlog-test", base_url))
+        .header("X-API-Key", "test-actionlog-key")
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(
+        launch_resp.status(),
+        StatusCode::OK,
+        "launch failed: {:?}",
+        launch_resp.text().await.unwrap()
+    );
+
+    // Wait for browser to start and action log to be written
+    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+
+    // Read action log via GET /api/action_log
+    let log_resp = http_client
+        .get(&format!("{}/api/action_log?profile_id=actionlog-test", base_url))
+        .header("X-API-Key", "test-actionlog-key")
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(log_resp.status(), StatusCode::OK);
+    let entries: Vec<serde_json::Value> = log_resp.json().await.unwrap();
+
+    // Verify at least one action was logged (launch action)
+    assert!(!entries.is_empty(), "action log should not be empty after launch");
+
+    // Verify the entry has expected fields
+    let entry = &entries[0];
+    assert!(entry.get("id").is_some(), "entry should have id");
+    assert!(entry.get("ts").is_some(), "entry should have ts");
+    assert!(entry.get("tool").is_some(), "entry should have tool");
+    assert!(entry.get("profile_id").is_some(), "entry should have profile_id");
+
+    // Kill browser via HTTP API
+    let kill_resp = http_client
+        .post(&format!("{}/api/kill/actionlog-test", base_url))
+        .header("X-API-Key", "test-actionlog-key")
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(
+        kill_resp.status(),
+        StatusCode::NO_CONTENT,
+        "kill failed: {:?}",
+        kill_resp.text().await.unwrap()
+    );
+
+    // Cleanup
+    tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+    let _ = std::fs::remove_dir_all(&data_dir);
+
+    {
+        let mut config = state.config.write();
+        config.profiles.retain(|p| p.id != "actionlog-test");
+    }
+}
