@@ -56,6 +56,10 @@ export const WorkflowEditor: React.FC<WorkflowEditorProps> = ({
     if (selectedStepIndex === index) {
       setSelectedStepIndex(null);
     }
+    // Guard against out-of-bounds index if selected step was after deleted one
+    if (selectedStepIndex !== null && selectedStepIndex >= newSteps.length) {
+      setSelectedStepIndex(newSteps.length > 0 ? newSteps.length - 1 : null);
+    }
   };
 
   const handleSave = async () => {
@@ -84,7 +88,11 @@ export const WorkflowEditor: React.FC<WorkflowEditorProps> = ({
     }
   };
 
-  const selectedStep = selectedStepIndex !== null ? steps[selectedStepIndex] : null;
+  const safeSelectedIndex =
+    selectedStepIndex !== null && selectedStepIndex < steps.length
+      ? selectedStepIndex
+      : null;
+  const selectedStep = safeSelectedIndex !== null ? steps[safeSelectedIndex] : null;
   const selectedStepType = stepTypes.find((st) => st.type === selectedStep?.type);
 
   return (
@@ -154,7 +162,10 @@ export const WorkflowEditor: React.FC<WorkflowEditorProps> = ({
               ))}
               <button
                 className="btn btn-secondary btn-sm"
-                onClick={() => setVariables({ ...variables, '': '' })}
+                onClick={() => {
+                  if ('' in variables) return; // Don't allow duplicate empty key
+                  setVariables({ ...variables, '': '' });
+                }}
               >
                 + Add Variable
               </button>
