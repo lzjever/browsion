@@ -271,4 +271,49 @@ mod tests {
         let json = serde_json::to_string(&workflow).unwrap();
         let _parsed: Workflow = serde_json::from_str(&json).unwrap();
     }
+
+    #[test]
+    fn test_workflow_empty_steps_valid() {
+        let w = Workflow {
+            id: "empty".to_string(),
+            name: "Empty Workflow".to_string(),
+            description: "".to_string(),
+            steps: vec![],
+            variables: std::collections::HashMap::new(),
+            created_at: 0,
+            updated_at: 0,
+        };
+        let json = serde_json::to_string(&w).unwrap();
+        let parsed: Workflow = serde_json::from_str(&json).unwrap();
+        assert!(parsed.steps.is_empty());
+    }
+
+    #[test]
+    fn test_workflow_variables_roundtrip() {
+        let mut vars = std::collections::HashMap::new();
+        vars.insert("url".to_string(), serde_json::Value::String("https://example.com".to_string()));
+        vars.insert("timeout".to_string(), serde_json::Value::Number(5000.into()));
+        let w = Workflow {
+            id: "var-test".to_string(),
+            name: "Var Test".to_string(),
+            description: "".to_string(),
+            steps: vec![],
+            variables: vars,
+            created_at: 100,
+            updated_at: 200,
+        };
+        let json = serde_json::to_string(&w).unwrap();
+        let parsed: Workflow = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.variables.get("url").unwrap(), "https://example.com");
+        assert_eq!(parsed.variables.get("timeout").unwrap(), &serde_json::Value::Number(5000.into()));
+    }
+
+    #[test]
+    fn test_step_type_serialization_roundtrip() {
+        for st in [StepType::Navigate, StepType::Click, StepType::Type, StepType::Screenshot] {
+            let json = serde_json::to_string(&st).unwrap();
+            let parsed: StepType = serde_json::from_str(&json).unwrap();
+            assert_eq!(parsed, st);
+        }
+    }
 }

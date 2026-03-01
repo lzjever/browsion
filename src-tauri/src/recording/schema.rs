@@ -180,4 +180,39 @@ mod tests {
         assert_eq!(session.actions[0].action_type, RecordedActionType::Navigate);
         assert_eq!(session.actions[1].action_type, RecordedActionType::Click);
     }
+
+    #[test]
+    fn test_recording_with_no_actions() {
+        let r = Recording {
+            id: "empty-rec".to_string(),
+            name: "Empty".to_string(),
+            description: "".to_string(),
+            profile_id: "p1".to_string(),
+            actions: vec![],
+            created_at: 0,
+            duration_ms: 0,
+        };
+        let json = serde_json::to_string(&r).unwrap();
+        let parsed: Recording = serde_json::from_str(&json).unwrap();
+        assert!(parsed.actions.is_empty());
+        assert_eq!(parsed.duration_ms, 0);
+    }
+
+    #[test]
+    fn test_all_recorded_action_types_serialize() {
+        use crate::recording::RecordedActionType;
+        let types = [
+            RecordedActionType::Navigate,
+            RecordedActionType::Click,
+            RecordedActionType::Type,
+            RecordedActionType::Screenshot,
+            RecordedActionType::NewTab,
+            RecordedActionType::Scroll,
+        ];
+        for t in &types {
+            let json = serde_json::to_string(t).unwrap();
+            let parsed: RecordedActionType = serde_json::from_str(&json).unwrap();
+            assert_eq!(&parsed, t);
+        }
+    }
 }
