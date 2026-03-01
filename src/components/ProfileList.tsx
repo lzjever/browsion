@@ -202,14 +202,26 @@ export const ProfileList: React.FC<ProfileListProps> = ({ onEditProfile, onClone
   };
 
   const handleStopRecording = async (name: string, description: string) => {
-    if (!recordingDialog?.profile) return;
+    console.log('=== handleStopRecording called ===');
+    console.log('recordingDialog:', recordingDialog);
+    console.log('profile:', recordingDialog?.profile);
+    console.log('name:', name);
+    console.log('description:', description);
+
+    if (!recordingDialog?.profile) {
+      console.error('ERROR: No profile in recordingDialog!');
+      return;
+    }
 
     try {
+      console.log('Calling tauriApi.stopRecording with:', recordingDialog.profile.id, name, description);
       await tauriApi.stopRecording(recordingDialog.profile.id, name, description);
+      console.log('stopRecording succeeded!');
       await loadRecordingSessions();
       setRecordingDialog(null);
       showToast('Recording saved', 'success');
     } catch (err) {
+      console.error('stopRecording failed:', err);
       showToast(`Failed to stop recording: ${err}`, 'error');
     }
   };
@@ -323,6 +335,10 @@ const RecordingSaveDialog: React.FC<RecordingSaveDialogProps> = ({
   const [description, setDescription] = useState('');
 
   const handleSubmit = (e: React.FormEvent) => {
+    console.log('=== RecordingSaveDialog form submitted ===');
+    console.log('name:', name);
+    console.log('description:', description);
+    console.log('Calling onSave...');
     e.preventDefault();
     if (name.trim()) {
       onSave(name.trim(), description.trim());
