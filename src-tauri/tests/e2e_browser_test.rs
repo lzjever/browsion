@@ -273,9 +273,9 @@ const HTML_INTERACT: &str = r#"<!DOCTYPE html>
 
 // ── tests ─────────────────────────────────────────────────────────────────────
 
-/// 1. Navigate to local page, read title, URL, and heading text.
+/// Navigate: read page title and URL.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn test_01_navigate_and_read_page_info() {
+async fn test_navigate_read_page_info_basic() {
     let Some(chrome) = find_chrome() else { eprintln!("SKIP: no Chrome"); return; };
     let (base, _srv) = spawn_test_server().await;
     let port = allocate_cdp_port();
@@ -297,9 +297,9 @@ async fn test_01_navigate_and_read_page_info() {
     browser.kill();
 }
 
-/// 2. JavaScript evaluation: arithmetic, strings, JSON, DOM.
+/// JavaScript: evaluate basic expression.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn test_02_javascript_evaluation() {
+async fn test_javascript_evaluate_basic_expression() {
     let Some(chrome) = find_chrome() else { eprintln!("SKIP: no Chrome"); return; };
     let (base, _srv) = spawn_test_server().await;
     let port = allocate_cdp_port();
@@ -328,9 +328,9 @@ async fn test_02_javascript_evaluation() {
     browser.kill();
 }
 
-/// 3. Click a button repeatedly and verify the counter DOM changes.
+/// Mouse: click button and verify DOM changes.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn test_03_click_button_changes_dom() {
+async fn test_mouse_click_button_changes_dom() {
     let Some(chrome) = find_chrome() else { eprintln!("SKIP: no Chrome"); return; };
     let (base, _srv) = spawn_test_server().await;
     let port = allocate_cdp_port();
@@ -355,9 +355,9 @@ async fn test_03_click_button_changes_dom() {
     browser.kill();
 }
 
-/// 4. Fill a form: type text, select dropdown, click submit, verify result div.
+/// Form: fill and submit basic form.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn test_04_form_fill_and_submit() {
+async fn test_form_fill_and_submit_basic() {
     let Some(chrome) = find_chrome() else { eprintln!("SKIP: no Chrome"); return; };
     let (base, _srv) = spawn_test_server().await;
     let port = allocate_cdp_port();
@@ -383,9 +383,9 @@ async fn test_04_form_fill_and_submit() {
     browser.kill();
 }
 
-/// 5. Screenshot: take full-page PNG, verify it's valid base64-encoded PNG bytes.
+/// Screenshot: capture full page as PNG.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn test_05_screenshot_valid_png() {
+async fn test_screenshot_full_page_png() {
     let Some(chrome) = find_chrome() else { eprintln!("SKIP: no Chrome"); return; };
     let (base, _srv) = spawn_test_server().await;
     let port = allocate_cdp_port();
@@ -405,9 +405,9 @@ async fn test_05_screenshot_valid_png() {
     browser.kill();
 }
 
-/// 6. Element screenshot: capture a single element as PNG.
+/// Screenshot: capture element as PNG.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn test_06_screenshot_element() {
+async fn test_screenshot_element_png() {
     let Some(chrome) = find_chrome() else { eprintln!("SKIP: no Chrome"); return; };
     let (base, _srv) = spawn_test_server().await;
     let port = allocate_cdp_port();
@@ -424,9 +424,9 @@ async fn test_06_screenshot_element() {
     browser.kill();
 }
 
-/// 7. Get AX tree via get_page_state, find button by name, click via ref_id.
+/// AX-Ref: click button by semantic reference.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn test_07_ax_tree_and_click_ref() {
+async fn test_axref_click_button_by_ref() {
     let Some(chrome) = find_chrome() else { eprintln!("SKIP: no Chrome"); return; };
     let (base, _srv) = spawn_test_server().await;
     let port = allocate_cdp_port();
@@ -460,9 +460,9 @@ async fn test_07_ax_tree_and_click_ref() {
     browser.kill();
 }
 
-/// 8. type_ref: find input via AX tree, type into it via ref_id, verify value.
+/// AX-Ref: type into input by semantic reference.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn test_08_type_ref() {
+async fn test_axref_type_input_by_ref() {
     let Some(chrome) = find_chrome() else { eprintln!("SKIP: no Chrome"); return; };
     let (base, _srv) = spawn_test_server().await;
     let port = allocate_cdp_port();
@@ -488,9 +488,9 @@ async fn test_08_type_ref() {
     browser.kill();
 }
 
-/// 9. Tab management: open new tab, navigate it, switch back, close it.
+/// Tabs: list, create new, and close.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn test_09_tab_management() {
+async fn test_tabs_list_new_close() {
     let Some(chrome) = find_chrome() else { eprintln!("SKIP: no Chrome"); return; };
     let (base, _srv) = spawn_test_server().await;
     let port = allocate_cdp_port();
@@ -526,9 +526,9 @@ async fn test_09_tab_management() {
     browser.kill();
 }
 
-/// 10. wait_for_new_tab: subscribe before clicking target="_blank" link.
+/// Tabs: wait for new tab from target="_blank" link.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn test_10_wait_for_new_tab() {
+async fn test_tabs_wait_for_new_tab() {
     let Some(chrome) = find_chrome() else { eprintln!("SKIP: no Chrome"); return; };
     let (base, _srv) = spawn_test_server().await;
     let port = allocate_cdp_port();
@@ -558,9 +558,9 @@ async fn test_10_wait_for_new_tab() {
     browser.kill();
 }
 
-/// 11. Cookies: set, get, verify, delete, verify deletion.
+/// Cookies: set and get basic cookie.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn test_11_cookies() {
+async fn test_cookies_set_and_get() {
     let Some(chrome) = find_chrome() else { eprintln!("SKIP: no Chrome"); return; };
     let (base, _srv) = spawn_test_server().await;
     let port = allocate_cdp_port();
@@ -592,9 +592,9 @@ async fn test_11_cookies() {
     browser.kill();
 }
 
-/// 12. Console capture: enable before load, verify console.log entries are captured.
+/// Console: capture and retrieve console logs.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn test_12_console_capture() {
+async fn test_console_capture_and_retrieve() {
     let Some(chrome) = find_chrome() else { eprintln!("SKIP: no Chrome"); return; };
     let (base, _srv) = spawn_test_server().await;
     let port = allocate_cdp_port();
@@ -629,9 +629,9 @@ async fn test_12_console_capture() {
     browser.kill();
 }
 
-/// 13. Network log: navigation request appears in the log.
+/// Network: log request and response.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn test_13_network_log() {
+async fn test_network_log_request_response() {
     let Some(chrome) = find_chrome() else { eprintln!("SKIP: no Chrome"); return; };
     let (base, _srv) = spawn_test_server().await;
     let port = allocate_cdp_port();
@@ -657,9 +657,9 @@ async fn test_13_network_log() {
     browser.kill();
 }
 
-/// 14. localStorage: set items, read back, remove one, clear all.
+/// Storage: set and get localStorage.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn test_14_local_storage() {
+async fn test_storage_set_and_get_local() {
     let Some(chrome) = find_chrome() else { eprintln!("SKIP: no Chrome"); return; };
     let (base, _srv) = spawn_test_server().await;
     let port = allocate_cdp_port();
@@ -695,9 +695,9 @@ async fn test_14_local_storage() {
     browser.kill();
 }
 
-/// 15. get_page_text extracts full body text.
+/// Observe: get full page text.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn test_15_get_page_text() {
+async fn test_observe_get_page_text() {
     let Some(chrome) = find_chrome() else { eprintln!("SKIP: no Chrome"); return; };
     let (base, _srv) = spawn_test_server().await;
     let port = allocate_cdp_port();
@@ -712,9 +712,9 @@ async fn test_15_get_page_text() {
     browser.kill();
 }
 
-/// 16. go_back and go_forward between two pages.
+/// Navigate: go back and forward in history.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn test_16_navigation_history() {
+async fn test_navigate_go_back_and_forward() {
     let Some(chrome) = find_chrome() else { eprintln!("SKIP: no Chrome"); return; };
     let (base, _srv) = spawn_test_server().await;
     let port = allocate_cdp_port();
@@ -747,9 +747,9 @@ async fn test_16_navigation_history() {
     browser.kill();
 }
 
-/// 17. slow_type: type character-by-character and verify keypress events fire.
+/// Keyboard: slow type and press key.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn test_17_slow_type_and_press_key() {
+async fn test_keyboard_slow_type_and_press_key() {
     let Some(chrome) = find_chrome() else { eprintln!("SKIP: no Chrome"); return; };
     let (base, _srv) = spawn_test_server().await;
     let port = allocate_cdp_port();
@@ -780,9 +780,9 @@ async fn test_17_slow_type_and_press_key() {
     browser.kill();
 }
 
-/// 18. Reload resets DOM state to server-served HTML.
+/// Navigate: reload page.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn test_18_reload_resets_state() {
+async fn test_navigate_reload_page() {
     let Some(chrome) = find_chrome() else { eprintln!("SKIP: no Chrome"); return; };
     let (base, _srv) = spawn_test_server().await;
     let port = allocate_cdp_port();
@@ -809,9 +809,9 @@ async fn test_18_reload_resets_state() {
     browser.kill();
 }
 
-/// 19. wait_for_url: detects URL change after navigation.
+/// Navigate: wait for URL pattern.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn test_19_wait_for_url() {
+async fn test_navigate_wait_for_url_pattern() {
     let Some(chrome) = find_chrome() else { eprintln!("SKIP: no Chrome"); return; };
     let (base, _srv) = spawn_test_server().await;
     let port = allocate_cdp_port();
@@ -832,9 +832,9 @@ async fn test_19_wait_for_url() {
     browser.kill();
 }
 
-/// 20. Network interception: block a URL pattern, verify fetch fails.
+/// Network: block URL pattern.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn test_20_network_intercept_block() {
+async fn test_network_block_url_pattern() {
     let Some(chrome) = find_chrome() else { eprintln!("SKIP: no Chrome"); return; };
     let (base, _srv) = spawn_test_server().await;
     let port = allocate_cdp_port();
