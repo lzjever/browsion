@@ -109,11 +109,21 @@ pub struct CDPClient {
     cdp_port: u16,
     /// Whether manual recording is active (for auto-reinject on page load)
     is_recording: Arc<Mutex<bool>>,
+    /// Recording session manager for browser-level event recording (optional)
+    recording_manager: Option<Arc<crate::recording::session::RecordingSessionManager>>,
 }
 
 impl CDPClient {
     /// Create a new CDP client (allocates a fresh port).
     pub fn new(profile_id: String) -> Self {
+        Self::with_recording_manager(profile_id, None)
+    }
+
+    /// Create a new CDP client with recording manager (for browser-level event recording).
+    pub fn with_recording_manager(
+        profile_id: String,
+        recording_manager: Option<Arc<crate::recording::session::RecordingSessionManager>>,
+    ) -> Self {
         Self {
             ws_tx: None,
             responses: Arc::new(Mutex::new(HashMap::new())),
@@ -133,6 +143,7 @@ impl CDPClient {
             msg_id: Arc::new(Mutex::new(1)),
             cdp_port: crate::process::port::allocate_cdp_port(),
             is_recording: Arc::new(Mutex::new(false)),
+            recording_manager,
         }
     }
 
@@ -140,6 +151,15 @@ impl CDPClient {
     /// Does **not** launch Chrome — the browser must already be running
     /// with `--remote-debugging-port={cdp_port}`.
     pub async fn attach(profile_id: String, cdp_port: u16) -> Result<Self, String> {
+        Self::attach_with_recording(profile_id, cdp_port, None).await
+    }
+
+    /// Attach to an already-running Chrome instance with recording manager support.
+    pub async fn attach_with_recording(
+        profile_id: String,
+        cdp_port: u16,
+        recording_manager: Option<Arc<crate::recording::session::RecordingSessionManager>>,
+    ) -> Result<Self, String> {
         let mut client = Self {
             ws_tx: None,
             responses: Arc::new(Mutex::new(HashMap::new())),
@@ -159,6 +179,7 @@ impl CDPClient {
             msg_id: Arc::new(Mutex::new(1)),
             cdp_port,
             is_recording: Arc::new(Mutex::new(false)),
+            recording_manager,
         };
         client.connect_websocket().await?;
         Ok(client)
@@ -332,6 +353,7 @@ impl CDPClient {
         let ws_tx_for_reader = ws_tx_arc.clone();
         let msg_id_for_reader = self.msg_id.clone();
         let _profile_id_for_reader = self.profile_id.clone();
+        let recording_manager_for_reader = self.recording_manager.clone();
 
         tokio::spawn(async move {
             while let Some(msg) = StreamExt::next(&mut rx).await {
@@ -386,11 +408,29 @@ impl CDPClient {
                                             let mut reg = tab_registry.lock().await;
                                             reg.entry(target_id.clone()).or_insert_with(|| {
                                                 TabState {
-                                                    url,
+                                                    url: url.clone(),
                                                     ..Default::default()
                                                 }
                                             });
                                             tracing::debug!("New tab discovered: {}", target_id);
+
+                                            // Record new tab action if recording is active
+                                            if let Some(ref manager) = recording_manager_for_reader {
+                                                if manager.is_recording(&_profile_id_for_reader) {
+                                                    let action_params = serde_json::json!({
+                                                        "target_id": target_id,
+                                                        "url": url
+                                                    });
+                                                    let _ = manager.add_action(
+                                                        &_profile_id_for_reader,
+                                                        crate::recording::schema::RecordedActionType::NewTab,
+                                                        action_params
+                                                    ).map_err(|e| {
+                                                        tracing::error!("Failed to record new tab action: {}", e);
+                                                    });
+                                                    tracing::info!("Recorded NewTab action for target_id={}, url={}", target_id, url);
+                                                }
+                                            }
                                         }
                                     }
                                     "Target.targetDestroyed" => {
@@ -398,6 +438,23 @@ impl CDPClient {
                                             .as_str().unwrap_or("").to_string();
                                         tab_registry.lock().await.remove(&target_id);
                                         tracing::debug!("Tab destroyed: {}", target_id);
+
+                                        // Record close tab action if recording is active
+                                        if let Some(ref manager) = recording_manager_for_reader {
+                                            if manager.is_recording(&_profile_id_for_reader) {
+                                                let action_params = serde_json::json!({
+                                                    "target_id": target_id
+                                                });
+                                                let _ = manager.add_action(
+                                                    &_profile_id_for_reader,
+                                                    crate::recording::schema::RecordedActionType::CloseTab,
+                                                    action_params
+                                                ).map_err(|e| {
+                                                    tracing::error!("Failed to record close tab action: {}", e);
+                                                });
+                                                tracing::info!("Recorded CloseTab action for target_id={}", target_id);
+                                            }
+                                        }
                                     }
                                     "Target.targetInfoChanged" => {
                                         let target_id = params["targetInfo"]["targetId"]
@@ -2844,6 +2901,24 @@ impl CDPClient {
         self.ax_ref_cache.lock().await.clear();
         *self.active_frame_id.lock().await = None;
 
+        // Record switch tab action if recording is active
+        if let Some(ref manager) = self.recording_manager {
+            if manager.is_recording(&self.profile_id) {
+                let action_params = serde_json::json!({
+                    "target_id": target_id,
+                    "previous_target_id": current_target
+                });
+                let _ = manager.add_action(
+                    &self.profile_id,
+                    crate::recording::schema::RecordedActionType::SwitchTab,
+                    action_params
+                ).map_err(|e| {
+                    tracing::error!("Failed to record switch tab action: {}", e);
+                });
+                tracing::info!("Recorded SwitchTab action for target_id={}, previous={}", target_id, current_target);
+            }
+        }
+
         tracing::info!("Switched to tab: {}", target_id);
         Ok(())
     }
@@ -3168,6 +3243,38 @@ impl CDPClient {
                             shiftKey: e.shiftKey,
                             metaKey: e.metaKey
                         });
+                    }
+                }, true);
+
+                // Intercept window.open() calls
+                const originalOpen = window.open;
+                window.open = function(url, target, features) {
+                    console.log('__BROWSION_EVENT__', JSON.stringify({
+                        type: 'window_open',
+                        data: {
+                            url: url,
+                            target: target || '_blank',
+                            features: features || ''
+                        },
+                        timestamp: Date.now()
+                    }));
+                    // Still call the original function
+                    return originalOpen.call(this, url, target, features);
+                };
+
+                // Intercept target="_blank" links
+                document.addEventListener('click', (e) => {
+                    const target = e.target.closest('a');
+                    if (target && target.target === '_blank') {
+                        console.log('__BROWSION_EVENT__', JSON.stringify({
+                            type: 'link_with_target_blank',
+                            data: {
+                                selector: getSelector(target),
+                                href: target.href,
+                                text: target.textContent.trim()
+                            },
+                            timestamp: Date.now()
+                        }));
                     }
                 }, true);
 
