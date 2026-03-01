@@ -62,17 +62,49 @@ pub async fn recording_to_workflow(
         .unwrap_or_default()
         .as_millis() as u64;
 
+    // Track target_id to variable mappings (for cross-tab actions)
+    // Maps original target_id -> variable name (e.g., "tab1", "tab2")
+    let mut tab_index = 0;
+    let mut target_to_var: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+
     let steps: Result<Vec<WorkflowStep>, String> = recording
         .actions
         .into_iter()
         .map(|action| {
-            let step_type = crate::workflow::schema::StepType::from(action.action_type);
+            let step_type = crate::workflow::schema::StepType::from(action.action_type.clone());
+
+            // Process params to handle dynamic target_id references
+            let mut params = action.params.clone();
+
+            match step_type {
+                crate::workflow::schema::StepType::NewTab => {
+                    // NewTab creates a new tab, assign it a variable name
+                    tab_index += 1;
+                    let var_name = format!("tab{}", tab_index);
+                    target_to_var.insert(
+                        params.get("target_id").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                        var_name.clone()
+                    );
+                    // Store the variable name for later reference
+                    params["_tab_var"] = serde_json::json!(var_name);
+                }
+                crate::workflow::schema::StepType::SwitchTab | crate::workflow::schema::StepType::CloseTab => {
+                    // Replace target_id with variable reference
+                    if let Some(target_id) = params.get("target_id").and_then(|v| v.as_str()) {
+                        if let Some(var_name) = target_to_var.get(target_id) {
+                            params["target_id"] = serde_json::json!(format!("${{{}}}", var_name));
+                        }
+                    }
+                }
+                _ => {}
+            }
+
             Ok(WorkflowStep {
                 id: format!("step-{}", action.index),
                 name: format!("{} ({}ms)", step_type, action.timestamp_ms),
                 description: String::new(),
                 step_type,
-                params: action.params,
+                params,
                 continue_on_error: false,
                 timeout_ms: 30000,
             })

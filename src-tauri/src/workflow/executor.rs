@@ -44,7 +44,7 @@ impl WorkflowExecutor {
         for (index, step) in workflow.steps.iter().enumerate() {
             execution.current_step_index = index;
 
-            let result = self.execute_step(step, &execution, &workflow.variables).await;
+            let result = self.execute_step(step, &mut execution, &workflow.variables).await;
 
             execution.step_results.push(result.clone());
 
@@ -66,13 +66,16 @@ impl WorkflowExecutor {
     async fn execute_step(
         &self,
         step: &crate::workflow::schema::WorkflowStep,
-        execution: &WorkflowExecution,
+        execution: &mut WorkflowExecution,
         workflow_vars: &HashMap<String, serde_json::Value>,
     ) -> StepResult {
         let started_at = now_ms();
 
         // Resolve variables in params
         let params = self.resolve_variables(&step.params, &execution.variables, workflow_vars);
+
+        // Check if this step should store output to a variable (for NewTab)
+        let output_var = step.params.get("_tab_var").and_then(|v| v.as_str());
 
         // Execute based on step type
         let (status, output, error) = tokio::time::timeout(
@@ -87,6 +90,18 @@ impl WorkflowExecutor {
                 Some(format!("Step timeout after {}ms", step.timeout_ms)),
             )
         });
+
+        // Store output to variable if requested (for NewTab target_id tracking)
+        if let Some(var_name) = output_var {
+            if let Some(ref out) = output {
+                if let Some(target_id) = out.get("target_id").and_then(|v| v.as_str()) {
+                    execution.variables.insert(
+                        var_name.to_string(),
+                        serde_json::Value::String(target_id.to_string())
+                    );
+                }
+            }
+        }
 
         let completed_at = now_ms();
         let duration_ms = completed_at.saturating_sub(started_at);
@@ -251,6 +266,115 @@ impl WorkflowExecutor {
                 match client.post(&url_path).json(&body).send().await {
                     Ok(resp) if resp.status().is_success() => {
                         (ExecutionStatus::Completed, None, None)
+                    }
+                    Ok(resp) => (
+                        ExecutionStatus::Failed,
+                        None,
+                        Some(format!("HTTP {}", resp.status())),
+                    ),
+                    Err(e) => (ExecutionStatus::Failed, None, Some(e.to_string())),
+                }
+            }
+
+            StepType::NewTab => {
+                let url = params.get("url")
+                    .and_then(|v| v.as_str())
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or("about:blank");
+                let url_path = format!("{}/api/browser/{}/tabs/new", self.api_base, profile_id);
+                let body = serde_json::json!({ "url": url });
+
+                let mut req = client.post(&url_path).json(&body);
+                if let Some(key) = &self.api_key {
+                    req = req.header("X-API-Key", key);
+                }
+
+                match req.send().await {
+                    Ok(resp) if resp.status().is_success() => {
+                        if let Ok(data) = resp.json::<serde_json::Value>().await {
+                            (ExecutionStatus::Completed, Some(data), None)
+                        } else {
+                            (ExecutionStatus::Completed, None, None)
+                        }
+                    }
+                    Ok(resp) => (
+                        ExecutionStatus::Failed,
+                        None,
+                        Some(format!("HTTP {}", resp.status())),
+                    ),
+                    Err(e) => (ExecutionStatus::Failed, None, Some(e.to_string())),
+                }
+            }
+
+            StepType::SwitchTab => {
+                let target_id = params.get("target_id").and_then(|v| v.as_str()).unwrap_or("");
+                if target_id.is_empty() {
+                    return (ExecutionStatus::Failed, None, Some("target_id is required for switch_tab".to_string()));
+                }
+                let url_path = format!("{}/api/browser/{}/tabs/switch", self.api_base, profile_id);
+                let body = serde_json::json!({ "target_id": target_id });
+
+                let mut req = client.post(&url_path).json(&body);
+                if let Some(key) = &self.api_key {
+                    req = req.header("X-API-Key", key);
+                }
+
+                match req.send().await {
+                    Ok(resp) if resp.status().is_success() => {
+                        (ExecutionStatus::Completed, None, None)
+                    }
+                    Ok(resp) => (
+                        ExecutionStatus::Failed,
+                        None,
+                        Some(format!("HTTP {}", resp.status())),
+                    ),
+                    Err(e) => (ExecutionStatus::Failed, None, Some(e.to_string())),
+                }
+            }
+
+            StepType::CloseTab => {
+                let target_id = params.get("target_id").and_then(|v| v.as_str()).unwrap_or("");
+                if target_id.is_empty() {
+                    return (ExecutionStatus::Failed, None, Some("target_id is required for close_tab".to_string()));
+                }
+                let url_path = format!("{}/api/browser/{}/tabs/close", self.api_base, profile_id);
+                let body = serde_json::json!({ "target_id": target_id });
+
+                let mut req = client.post(&url_path).json(&body);
+                if let Some(key) = &self.api_key {
+                    req = req.header("X-API-Key", key);
+                }
+
+                match req.send().await {
+                    Ok(resp) if resp.status().is_success() => {
+                        (ExecutionStatus::Completed, None, None)
+                    }
+                    Ok(resp) => (
+                        ExecutionStatus::Failed,
+                        None,
+                        Some(format!("HTTP {}", resp.status())),
+                    ),
+                    Err(e) => (ExecutionStatus::Failed, None, Some(e.to_string())),
+                }
+            }
+
+            StepType::WaitForNewTab => {
+                let timeout_ms = params.get("timeout_ms").and_then(|v| v.as_u64()).unwrap_or(5000);
+                let url_path = format!("{}/api/browser/{}/tabs/wait_new", self.api_base, profile_id);
+                let body = serde_json::json!({ "timeout_ms": timeout_ms });
+
+                let mut req = client.post(&url_path).json(&body);
+                if let Some(key) = &self.api_key {
+                    req = req.header("X-API-Key", key);
+                }
+
+                match req.send().await {
+                    Ok(resp) if resp.status().is_success() => {
+                        if let Ok(data) = resp.json::<serde_json::Value>().await {
+                            (ExecutionStatus::Completed, Some(data), None)
+                        } else {
+                            (ExecutionStatus::Completed, None, None)
+                        }
                     }
                     Ok(resp) => (
                         ExecutionStatus::Failed,
