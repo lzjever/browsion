@@ -1953,3 +1953,94 @@ pub async fn run_server(state: ApiState, port: u16, api_key: Option<String>) -> 
         .map_err(|e| e.to_string())?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::recording::RecordedActionType;
+
+    // -----------------------------------------------------------------------
+    // parse_path_for_log tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_parse_browser_tool_path() {
+        let (profile_id, tool) = parse_path_for_log("/api/browser/prof-123/navigate");
+        assert_eq!(profile_id, "prof-123");
+        assert_eq!(tool, "navigate");
+    }
+
+    #[test]
+    fn test_parse_browser_nested_tool_path() {
+        let (profile_id, tool) = parse_path_for_log("/api/browser/prof-abc/tabs/new");
+        assert_eq!(profile_id, "prof-abc");
+        assert_eq!(tool, "tabs/new");
+    }
+
+    #[test]
+    fn test_parse_launch_path() {
+        let (profile_id, tool) = parse_path_for_log("/api/launch/my-profile");
+        assert_eq!(profile_id, "my-profile");
+        assert_eq!(tool, "launch");
+    }
+
+    #[test]
+    fn test_parse_kill_path() {
+        let (profile_id, tool) = parse_path_for_log("/api/kill/my-profile");
+        assert_eq!(profile_id, "my-profile");
+        assert_eq!(tool, "kill");
+    }
+
+    #[test]
+    fn test_parse_profiles_crud_path() {
+        let (profile_id, tool) = parse_path_for_log("/api/profiles/some-id");
+        assert_eq!(profile_id, "");
+        assert_eq!(tool, "profiles/some-id");
+    }
+
+    #[test]
+    fn test_parse_health_path() {
+        let (profile_id, tool) = parse_path_for_log("/api/health");
+        assert_eq!(profile_id, "");
+        assert_eq!(tool, "health");
+    }
+
+    // -----------------------------------------------------------------------
+    // tool_to_recorded_action tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_tool_navigate() {
+        assert_eq!(tool_to_recorded_action("navigate"), Some(RecordedActionType::Navigate));
+    }
+
+    #[test]
+    fn test_tool_navigate_wait() {
+        assert_eq!(tool_to_recorded_action("navigate_wait"), Some(RecordedActionType::Navigate));
+    }
+
+    #[test]
+    fn test_tool_click() {
+        assert_eq!(tool_to_recorded_action("click"), Some(RecordedActionType::Click));
+    }
+
+    #[test]
+    fn test_tool_screenshot() {
+        assert_eq!(tool_to_recorded_action("screenshot"), Some(RecordedActionType::Screenshot));
+    }
+
+    #[test]
+    fn test_tool_new_tab() {
+        assert_eq!(tool_to_recorded_action("new_tab"), Some(RecordedActionType::NewTab));
+    }
+
+    #[test]
+    fn test_tool_unknown() {
+        assert_eq!(tool_to_recorded_action("some_unknown_tool"), None);
+    }
+
+    #[test]
+    fn test_tool_empty_string() {
+        assert_eq!(tool_to_recorded_action(""), None);
+    }
+}
