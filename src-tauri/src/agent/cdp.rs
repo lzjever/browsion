@@ -2849,6 +2849,25 @@ impl CDPClient {
         Ok(())
     }
 
+    /// Delete a specific cookie by name, domain, and/or path.
+    /// If only name is provided, deletes all cookies with that name across all domains/paths.
+    pub async fn delete_cookie_named(
+        &self,
+        name: String,
+        domain: Option<String>,
+        path: Option<String>,
+    ) -> Result<(), String> {
+        let mut params = json!({ "name": name });
+        if let Some(d) = domain {
+            params["domain"] = json!(d);
+        }
+        if let Some(p) = path {
+            params["path"] = json!(p);
+        }
+        self.send_command("Network.deleteCookies", params).await?;
+        Ok(())
+    }
+
     // ── Advanced: Console Logs ─────────────────────────────────────
 
     /// Get recent console log entries (captures console.*, browser errors, and JS exceptions).

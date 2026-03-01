@@ -2161,3 +2161,30 @@ async fn test_storage_remove_local_key() {
 
     browser.kill();
 }
+
+/// 43. Cookies delete: delete specific cookie.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_cookies_delete_specific_cookie() {
+    let Some(chrome) = find_chrome() else { eprintln!("SKIP: no Chrome"); return; };
+    let port = allocate_cdp_port();
+    let browser = TestBrowser::launch(&chrome, port).await;
+
+    browser.client.navigate_wait("https://example.com", "load", 5000).await.unwrap();
+
+    // Set multiple cookies
+    browser.client.set_cookie("session1", "value1", "example.com", "/").await.unwrap();
+    browser.client.set_cookie("session2", "value2", "example.com", "/").await.unwrap();
+
+    // Delete one cookie
+    browser.client.delete_cookie_named("session1".to_string(), Some("example.com".to_string()), None).await.unwrap();
+
+    // Verify only one deleted
+    let cookies = browser.client.get_cookies().await.unwrap();
+    let session2_exists = cookies.iter().any(|c| c.name == "session2");
+    let session1_exists = cookies.iter().any(|c| c.name == "session1");
+
+    assert!(session2_exists, "session2 should still exist");
+    assert!(!session1_exists, "session1 should be deleted");
+
+    browser.kill();
+}
