@@ -774,3 +774,302 @@ async fn test_profile_snapshots_list_unknown_profile() {
     let infos: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
     assert!(infos.is_empty());
 }
+
+// ---------------------------------------------------------------------------
+// Additional profile CRUD edge cases
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_api_list_multiple_profiles() {
+    let state = make_state();
+
+    // Add three profiles - need to create new app for each request
+    for i in 1..=3 {
+        let api_app = app(state.clone(), None);
+        let profile = serde_json::json!({
+            "id": format!("multi-test-{}", i),
+            "name": format!("Test Profile {}", i),
+            "description": "",
+            "user_data_dir": format!("/tmp/test-multi-{}", i),
+            "lang": "en-US",
+            "tags": [],
+            "custom_args": []
+        });
+
+        let req = axum::http::Request::builder()
+            .method("POST")
+            .uri("/api/profiles")
+            .header("content-type", "application/json")
+            .body(json_body(&profile))
+            .unwrap();
+        let res = api_app.clone().oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::CREATED);
+    }
+
+    // List all profiles
+    let api_app = app(state.clone(), None);
+    let req = axum::http::Request::builder()
+        .uri("/api/profiles")
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let res = api_app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(res.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let profiles: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
+    assert_eq!(profiles.len(), 3);
+}
+
+#[tokio::test]
+async fn test_api_add_profile_with_tags_and_custom_args() {
+    let state = make_state();
+    let api_app = app(state.clone(), None);
+
+    let profile = serde_json::json!({
+        "id": "tags-args-test",
+        "name": "Tags and Args Test",
+        "description": "Testing tags and custom args roundtrip",
+        "user_data_dir": "/tmp/test-tags-args",
+        "lang": "en-US",
+        "tags": ["work", "development", "testing"],
+        "custom_args": ["--disable-gpu", "--disable-dev-shm-usage", "--no-sandbox"]
+    });
+
+    let req = axum::http::Request::builder()
+        .method("POST")
+        .uri("/api/profiles")
+        .header("content-type", "application/json")
+        .body(json_body(&profile))
+        .unwrap();
+    let res = api_app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::CREATED);
+
+    // Verify the profile was created with correct tags and custom_args
+    // Note: Need to create new app instance since oneshot consumes the router
+    let api_app = app(state.clone(), None);
+    let req = axum::http::Request::builder()
+        .uri("/api/profiles/tags-args-test")
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let res = api_app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(res.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let created: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    assert_eq!(created["id"], "tags-args-test");
+    assert_eq!(created["tags"], serde_json::json!(["work", "development", "testing"]));
+    assert_eq!(
+        created["custom_args"],
+        serde_json::json!(["--disable-gpu", "--disable-dev-shm-usage", "--no-sandbox"])
+    );
+}
+
+#[tokio::test]
+async fn test_api_add_duplicate_profile_id() {
+    let state = make_state();
+    let api_app = app(state.clone(), None);
+
+    let profile = serde_json::json!({
+        "id": "duplicate-test",
+        "name": "Original Profile",
+        "description": "",
+        "user_data_dir": "/tmp/test-dup-1",
+        "lang": "en-US",
+        "tags": [],
+        "custom_args": []
+    });
+
+    // Add first profile - should succeed with 201 CREATED
+    let req = axum::http::Request::builder()
+        .method("POST")
+        .uri("/api/profiles")
+        .header("content-type", "application/json")
+        .body(json_body(&profile))
+        .unwrap();
+    let res = api_app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::CREATED);
+
+    // Try to add duplicate ID - should fail with 409 CONFLICT
+    // Note: Need to create new app instance since oneshot consumes the router
+    let api_app = app(state.clone(), None);
+    let req = axum::http::Request::builder()
+        .method("POST")
+        .uri("/api/profiles")
+        .header("content-type", "application/json")
+        .body(json_body(&profile))
+        .unwrap();
+    let res = api_app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::CONFLICT);
+}
+
+#[tokio::test]
+async fn test_api_add_profile_missing_required_field() {
+    let state = make_state();
+    let api_app = app(state.clone(), None);
+
+    // Missing required 'name' field
+    let profile = serde_json::json!({
+        "id": "missing-field-test",
+        "description": "",
+        "user_data_dir": "/tmp/test-missing",
+        "lang": "en-US",
+        "tags": [],
+        "custom_args": []
+    });
+
+    let req = axum::http::Request::builder()
+        .method("POST")
+        .uri("/api/profiles")
+        .header("content-type", "application/json")
+        .body(json_body(&profile))
+        .unwrap();
+    let res = api_app.oneshot(req).await.unwrap();
+    // Should fail with 422 Unprocessable Entity due to JSON deserialization error
+    // (serde fails to deserialize BrowserProfile without required fields)
+    assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+#[tokio::test]
+async fn test_api_update_profile_id_mismatch() {
+    let state = make_state();
+    let api_app = app(state.clone(), None);
+
+    // Create a profile
+    let profile = serde_json::json!({
+        "id": "mismatch-test",
+        "name": "Original Profile",
+        "description": "",
+        "user_data_dir": "/tmp/test-mismatch",
+        "lang": "en-US",
+        "tags": [],
+        "custom_args": []
+    });
+
+    let req = axum::http::Request::builder()
+        .method("POST")
+        .uri("/api/profiles")
+        .header("content-type", "application/json")
+        .body(json_body(&profile))
+        .unwrap();
+    let res = api_app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::CREATED);
+
+    // Try to update with different ID in body vs path
+    // Note: Need to create new app instance since oneshot consumes the router
+    let api_app = app(state.clone(), None);
+    let updated = serde_json::json!({
+        "id": "different-id",  // Different from path
+        "name": "Updated Profile",
+        "description": "",
+        "user_data_dir": "/tmp/test-mismatch",
+        "lang": "en-US",
+        "tags": [],
+        "custom_args": []
+    });
+
+    let req = axum::http::Request::builder()
+        .method("PUT")
+        .uri("/api/profiles/mismatch-test")  // Path ID
+        .header("content-type", "application/json")
+        .body(json_body(&updated))
+        .unwrap();
+    let res = api_app.clone().oneshot(req).await.unwrap();
+    // Should fail with 400 Bad Request, not 5xx
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+}
+
+// ---------------------------------------------------------------------------
+// Action log content verification tests
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_action_log_records_browser_calls() {
+    let state = make_state();
+    let api_app = app(state.clone(), None);
+
+    // Make a browser control call (navigate) to generate an action log entry
+    let req = axum::http::Request::builder()
+        .method("POST")
+        .uri("/api/browser/fake-id/navigate")
+        .header("content-type", "application/json")
+        .body(json_body(&serde_json::json!({"url": "https://example.com"})))
+        .unwrap();
+    let _ = api_app.clone().oneshot(req).await.unwrap();
+
+    // Wait for async log write
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    // Read the action log
+    let req = axum::http::Request::builder()
+        .uri("/api/action_log")
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let res = api_app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(res.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let entries: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
+
+    // Should have at least one entry
+    assert!(!entries.is_empty());
+    // Find the navigate entry
+    let navigate_entry = entries
+        .iter()
+        .find(|e| e["tool"] == "navigate" && e["profile_id"] == "fake-id");
+    assert!(navigate_entry.is_some(), "Expected to find navigate action in log");
+}
+
+#[tokio::test]
+async fn test_action_log_clear_removes_entries() {
+    let state = make_state();
+    let api_app = app(state.clone(), None);
+
+    // Generate some action log entries
+    for _ in 0..3 {
+        let req = axum::http::Request::builder()
+            .uri("/api/profiles")
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let _ = api_app.clone().oneshot(req).await.unwrap();
+    }
+
+    // Wait for async log writes
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    // Verify entries exist
+    let req = axum::http::Request::builder()
+        .uri("/api/action_log")
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let res = api_app.clone().oneshot(req).await.unwrap();
+    let body = axum::body::to_bytes(res.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let entries_before: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
+    assert!(!entries_before.is_empty());
+
+    // Clear the log
+    let req = axum::http::Request::builder()
+        .method("DELETE")
+        .uri("/api/action_log")
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let res = api_app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+
+    // Verify log is empty
+    let req = axum::http::Request::builder()
+        .uri("/api/action_log")
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let res = api_app.oneshot(req).await.unwrap();
+    let body = axum::body::to_bytes(res.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let entries_after: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
+    assert!(entries_after.is_empty());
+}
