@@ -24,6 +24,10 @@ pub fn build_command(chrome_path: &Path, profile: &BrowserProfile, cdp_port: u16
     // Proxy server
     if let Some(proxy) = &profile.proxy_server {
         cmd.arg(format!("--proxy-server={}", proxy));
+    } else {
+        // Explicitly use direct connection when no proxy configured
+        // This prevents Chrome from using system proxy settings that may be misconfigured
+        cmd.arg("--proxy-server=direct://");
     }
 
     // Language
@@ -107,6 +111,8 @@ mod tests {
         assert!(args.contains(&"--user-data-dir=/tmp/chrome-profile".to_string()));
         assert!(args.contains(&"--lang=en-US".to_string()));
         assert!(args.contains(&"--remote-debugging-port=9300".to_string()));
+        // When no proxy configured, should use direct connection
+        assert!(args.contains(&"--proxy-server=direct://".to_string()));
     }
 
     #[test]
