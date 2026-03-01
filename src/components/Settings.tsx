@@ -328,8 +328,9 @@ export const Settings: React.FC = () => {
             <select
               value={cftChannel}
               onChange={(e) => {
-                setCftChannel(e.target.value);
-                const v = cftVersions.find((x) => x.channel === e.target.value);
+                const newChannel = e.target.value;
+                setCftChannel(newChannel);
+                const v = cftVersions.find((x) => x.channel === newChannel);
                 if (v) setCftVersion(v.version);
               }}
             >
