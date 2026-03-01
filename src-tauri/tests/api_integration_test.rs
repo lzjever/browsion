@@ -558,6 +558,201 @@ async fn test_api_action_log_entries_have_expected_shape() {
 }
 
 // ---------------------------------------------------------------------------
+// Browser control: comprehensive not-running error paths
+// ---------------------------------------------------------------------------
+
+macro_rules! browser_not_running_get {
+    ($name:ident, $path:literal) => {
+        #[tokio::test]
+        async fn $name() {
+            let app = make_app_no_auth();
+            let req = axum::http::Request::builder()
+                .uri(concat!("/api/browser/fake-id/", $path))
+                .body(axum::body::Body::empty())
+                .unwrap();
+            let res = app.oneshot(req).await.unwrap();
+            assert_eq!(res.status(), StatusCode::CONFLICT);
+        }
+    };
+}
+
+macro_rules! browser_not_running_post {
+    ($name:ident, $path:literal) => {
+        #[tokio::test]
+        async fn $name() {
+            let app = make_app_no_auth();
+            let req = axum::http::Request::builder()
+                .method("POST")
+                .uri(concat!("/api/browser/fake-id/", $path))
+                .header("content-type", "application/json")
+                .body(json_body(&serde_json::json!({})))
+                .unwrap();
+            let res = app.oneshot(req).await.unwrap();
+            assert_eq!(res.status(), StatusCode::CONFLICT);
+        }
+    };
+    ($name:ident, $path:literal, $body:expr) => {
+        #[tokio::test]
+        async fn $name() {
+            let app = make_app_no_auth();
+            let req = axum::http::Request::builder()
+                .method("POST")
+                .uri(concat!("/api/browser/fake-id/", $path))
+                .header("content-type", "application/json")
+                .body(json_body(&$body))
+                .unwrap();
+            let res = app.oneshot(req).await.unwrap();
+            assert_eq!(res.status(), StatusCode::CONFLICT);
+        }
+    };
+}
+
+macro_rules! browser_not_running_delete {
+    ($name:ident, $path:literal) => {
+        #[tokio::test]
+        async fn $name() {
+            let app = make_app_no_auth();
+            let req = axum::http::Request::builder()
+                .method("DELETE")
+                .uri(concat!("/api/browser/fake-id/", $path))
+                .body(axum::body::Body::empty())
+                .unwrap();
+            let res = app.oneshot(req).await.unwrap();
+            assert_eq!(res.status(), StatusCode::CONFLICT);
+        }
+    };
+    ($name:ident, $path:literal, $body:expr) => {
+        #[tokio::test]
+        async fn $name() {
+            let app = make_app_no_auth();
+            let req = axum::http::Request::builder()
+                .method("DELETE")
+                .uri(concat!("/api/browser/fake-id/", $path))
+                .header("content-type", "application/json")
+                .body(json_body(&$body))
+                .unwrap();
+            let res = app.oneshot(req).await.unwrap();
+            assert_eq!(res.status(), StatusCode::CONFLICT);
+        }
+    };
+}
+
+// GET routes
+browser_not_running_get!(test_browser_url_not_running, "url");
+browser_not_running_get!(test_browser_title_not_running, "title");
+browser_not_running_get!(test_browser_ax_tree_not_running, "ax_tree");
+browser_not_running_get!(test_browser_page_state_not_running, "page_state");
+browser_not_running_get!(test_browser_screenshot_element_not_running, "screenshot_element?selector=body");
+browser_not_running_get!(test_browser_network_log_not_running, "network_log");
+browser_not_running_get!(test_browser_console_not_running, "console");
+browser_not_running_get!(test_browser_page_text_not_running, "page_text");
+browser_not_running_get!(test_browser_storage_get_not_running, "storage");
+browser_not_running_get!(test_browser_pdf_not_running, "pdf");
+browser_not_running_get!(test_browser_frames_not_running, "frames");
+browser_not_running_get!(test_browser_export_cookies_not_running, "cookies/export");
+
+// POST routes — no required fields (empty {} is valid)
+browser_not_running_post!(test_browser_back_not_running, "back");
+browser_not_running_post!(test_browser_forward_not_running, "forward");
+browser_not_running_post!(test_browser_reload_not_running, "reload");
+browser_not_running_post!(test_browser_wait_for_nav_not_running, "wait_for_nav");
+browser_not_running_post!(test_browser_new_tab_not_running, "tabs/new");
+browser_not_running_post!(test_browser_wait_new_tab_not_running, "tabs/wait_new");
+browser_not_running_post!(test_browser_delete_cookies_not_running, "cookies/clear");
+browser_not_running_post!(test_browser_enable_console_not_running, "console/enable");
+browser_not_running_post!(test_browser_clear_console_not_running, "console/clear");
+browser_not_running_post!(test_browser_clear_network_log_not_running, "network_log/clear");
+browser_not_running_post!(test_browser_emulate_not_running, "emulate");
+browser_not_running_post!(test_browser_main_frame_not_running, "main_frame");
+browser_not_running_post!(test_browser_navigate_wait_not_running, "navigate_wait",
+    serde_json::json!({ "url": "https://example.com" }));
+
+// POST routes — required fields: selector
+browser_not_running_post!(test_browser_click_not_running, "click",
+    serde_json::json!({ "selector": "button" }));
+browser_not_running_post!(test_browser_hover_not_running, "hover",
+    serde_json::json!({ "selector": "button" }));
+browser_not_running_post!(test_browser_double_click_not_running, "double_click",
+    serde_json::json!({ "selector": "button" }));
+browser_not_running_post!(test_browser_right_click_not_running, "right_click",
+    serde_json::json!({ "selector": "button" }));
+browser_not_running_post!(test_browser_scroll_into_view_not_running, "scroll_into_view",
+    serde_json::json!({ "selector": "button" }));
+browser_not_running_post!(test_browser_wait_for_not_running, "wait_for",
+    serde_json::json!({ "selector": "button" }));
+browser_not_running_post!(test_browser_tap_not_running, "tap",
+    serde_json::json!({ "selector": "button" }));
+
+// POST routes — required fields: selector + text
+browser_not_running_post!(test_browser_type_not_running, "type",
+    serde_json::json!({ "selector": "input", "text": "hello" }));
+browser_not_running_post!(test_browser_slow_type_not_running, "slow_type",
+    serde_json::json!({ "selector": "input", "text": "hello" }));
+
+// POST routes — required fields: selector + other
+browser_not_running_post!(test_browser_select_option_not_running, "select_option",
+    serde_json::json!({ "selector": "select", "value": "opt" }));
+browser_not_running_post!(test_browser_upload_file_not_running, "upload_file",
+    serde_json::json!({ "selector": "input", "file_path": "/tmp/file.txt" }));
+browser_not_running_post!(test_browser_scroll_element_not_running, "scroll_element",
+    serde_json::json!({ "selector": "div" }));
+browser_not_running_post!(test_browser_swipe_not_running, "swipe",
+    serde_json::json!({ "selector": "div", "direction": "up" }));
+
+// POST routes — required fields: key / ref_id
+browser_not_running_post!(test_browser_press_key_not_running, "press_key",
+    serde_json::json!({ "key": "Enter" }));
+browser_not_running_post!(test_browser_click_ref_not_running, "click_ref",
+    serde_json::json!({ "ref_id": "e1" }));
+browser_not_running_post!(test_browser_focus_ref_not_running, "focus_ref",
+    serde_json::json!({ "ref_id": "e1" }));
+browser_not_running_post!(test_browser_type_ref_not_running, "type_ref",
+    serde_json::json!({ "ref_id": "e1", "text": "hello" }));
+
+// POST routes — required fields: direction
+browser_not_running_post!(test_browser_scroll_not_running, "scroll",
+    serde_json::json!({ "direction": "down" }));
+
+// POST routes — other required fields
+browser_not_running_post!(test_browser_extract_not_running, "extract",
+    serde_json::json!({ "selectors": {} }));
+browser_not_running_post!(test_browser_switch_tab_not_running, "tabs/switch",
+    serde_json::json!({ "target_id": "some-target" }));
+browser_not_running_post!(test_browser_close_tab_not_running, "tabs/close",
+    serde_json::json!({ "target_id": "some-target" }));
+browser_not_running_post!(test_browser_set_cookie_not_running, "cookies/set",
+    serde_json::json!({ "name": "test", "value": "val", "domain": "example.com" }));
+browser_not_running_post!(test_browser_handle_dialog_not_running, "handle_dialog",
+    serde_json::json!({ "action": "accept" }));
+browser_not_running_post!(test_browser_click_at_not_running, "click_at",
+    serde_json::json!({ "x": 100.0, "y": 200.0 }));
+browser_not_running_post!(test_browser_drag_not_running, "drag",
+    serde_json::json!({ "from_selector": "#a", "to_selector": "#b" }));
+browser_not_running_post!(test_browser_wait_for_text_not_running, "wait_for_text",
+    serde_json::json!({ "text": "hello" }));
+browser_not_running_post!(test_browser_wait_for_url_not_running, "wait_for_url",
+    serde_json::json!({ "pattern": "example.com" }));
+browser_not_running_post!(test_browser_intercept_block_not_running, "intercept/block",
+    serde_json::json!({ "url_pattern": "*.js" }));
+browser_not_running_post!(test_browser_intercept_mock_not_running, "intercept/mock",
+    serde_json::json!({ "url_pattern": "*.js", "status": 200, "body": "{}" }));
+browser_not_running_post!(test_browser_switch_frame_not_running, "switch_frame",
+    serde_json::json!({ "frame_id": "frame-1" }));
+
+// POST routes — cookies/import (requires format + data)
+browser_not_running_post!(test_browser_import_cookies_not_running, "cookies/import",
+    serde_json::json!({ "format": "json", "data": "[]" }));
+
+// POST routes — storage set (requires key + value)
+browser_not_running_post!(test_browser_set_storage_not_running, "storage",
+    serde_json::json!({ "key": "myKey", "value": "myVal" }));
+
+// DELETE routes
+browser_not_running_delete!(test_browser_clear_intercepts_not_running, "intercept");
+browser_not_running_delete!(test_browser_clear_storage_not_running, "storage",
+    serde_json::json!({}));
+
+// ---------------------------------------------------------------------------
 // Profile snapshots
 // ---------------------------------------------------------------------------
 
