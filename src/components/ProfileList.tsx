@@ -194,7 +194,7 @@ export const ProfileList: React.FC<ProfileListProps> = ({ onEditProfile, onClone
       try {
         await tauriApi.startRecording(profile.id);
         await loadRecordingSessions();
-        showToast('Recording started', 'success');
+        showToast('Recording started! Navigate to the page you want to record, then perform actions.', 'info');
       } catch (err) {
         showToast(`Failed to start recording: ${err}`, 'error');
       }

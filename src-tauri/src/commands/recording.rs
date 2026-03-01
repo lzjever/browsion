@@ -152,6 +152,23 @@ pub async fn stop_recording(
     tracing::info!("  description: {}", description);
     tracing::info!("========================================");
 
+    // IMPORTANT: Re-inject listeners before stopping to ensure we capture
+    // any events from the CURRENT active tab (user might have navigated)
+    if let Some(cdp_port) = state.process_manager.get_cdp_port(&profile_id) {
+        tracing::info!("Re-injecting listeners to capture final events...");
+        match state.session_manager.get_client(&profile_id, cdp_port).await {
+            Ok(handle) => {
+                let client = handle.lock().await;
+                let _ = client.start_manual_recording().await;
+                // Give a small delay for any immediate events to be captured
+                tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+            }
+            Err(e) => {
+                tracing::error!("Failed to re-inject listeners: {}", e);
+            }
+        }
+    }
+
     // Extract manual recording events from console log before stopping
     if let Some(cdp_port) = state.process_manager.get_cdp_port(&profile_id) {
         tracing::info!("Extracting events from console log (CDP port: {})", cdp_port);
