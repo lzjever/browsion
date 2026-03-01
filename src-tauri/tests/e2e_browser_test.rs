@@ -2188,3 +2188,36 @@ async fn test_cookies_delete_specific_cookie() {
 
     browser.kill();
 }
+
+/// 44. Data extraction: extract structured data from page.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_observe_extract_structured_data() {
+    let Some(chrome) = find_chrome() else { eprintln!("SKIP: no Chrome"); return; };
+    let port = allocate_cdp_port();
+    let browser = TestBrowser::launch(&chrome, port).await;
+
+    let html = r#"
+    <!DOCTYPE html>
+    <html><head><title>Extract Test</title></head>
+    <body>
+        <div class="product" data-id="123">
+            <h2 class="name">Test Product</h2>
+            <span class="price">$19.99</span>
+        </div>
+    </body></html>
+    "#;
+    let encoded = percent_encoding::percent_encode(html.as_bytes(), percent_encoding::NON_ALPHANUMERIC).to_string();
+    browser.client.navigate_wait(&format!("data:text/html;charset=utf-8,{}", encoded), "load", 5000).await.unwrap();
+
+    let mut selectors = std::collections::HashMap::new();
+    selectors.insert("name".to_string(), ".product .name".to_string());
+    selectors.insert("price".to_string(), ".product .price".to_string());
+
+    let result = browser.client.extract_data(&selectors).await.unwrap();
+
+    assert!(result.is_object(), "result should be object");
+    assert_eq!(result.get("name").and_then(|v| v.as_str()), Some("Test Product"));
+    assert_eq!(result.get("price").and_then(|v| v.as_str()), Some("$19.99"));
+
+    browser.kill();
+}
