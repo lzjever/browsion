@@ -63,6 +63,16 @@ pub fn build_command(chrome_path: &Path, profile: &BrowserProfile, cdp_port: u16
         cmd.arg(arg);
     }
 
+    // Pass IME environment variables to Chrome (Linux only)
+    #[cfg(target_os = "linux")]
+    {
+        for var in &["GTK_IM_MODULE", "QT_IM_MODULE", "XMODIFIERS"] {
+            if let Ok(val) = std::env::var(var) {
+                cmd.env(*var, val);
+            }
+        }
+    }
+
     // Don't wait for Chrome to exit
     #[cfg(unix)]
     {

@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.10.0] - 2026-03-02
+
+### New Features
+- **Linux IME Support** — automatic detection and configuration of Input Method Editor (IME) environment variables for Chinese/Japanese/Korean input
+  - Auto-detects fcitx5, fcitx, and ibus frameworks via running processes, environment variables, or binary existence
+  - Sets `GTK_IM_MODULE`, `QT_IM_MODULE`, `XMODIFIERS` environment variables if missing
+  - Fixes IME input in both Tauri app (WebKitGTK) and Chrome browsers launched by Browsion
+  - Particularly useful for Wayland desktop environments where `~/.xprofile` is not read
+
+### Internal
+- New `platform::ime` module for Linux-specific IME detection
+- Early initialization in `main.rs` before GTK/WebKit startup
+- Chrome subprocess inherits IME environment variables via `launcher.rs`
+
+---
+
 ## [0.9.5] - 2026-03-01
 
 ### New Features

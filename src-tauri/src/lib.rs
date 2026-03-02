@@ -4,6 +4,7 @@ pub mod commands;
 pub mod config;
 pub mod cft;
 pub mod error;
+pub mod platform;
 pub mod process;
 pub mod recording;
 pub mod state;
