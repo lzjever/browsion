@@ -1,12 +1,23 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
+import { listen } from '@tauri-apps/api/event';
 import { tauriApi } from '../api/tauri';
-import type { Recording, BrowserProfile, RecordedAction } from '../types/profile';
+import type { Recording, BrowserProfile } from '../types/profile';
 import { useToast } from './Toast';
 
 interface RecordingPlayerProps {
   recording: Recording;
   profiles: BrowserProfile[];
   onClose: () => void;
+}
+
+interface PlaybackProgressEvent {
+  recording_id: string;
+  profile_id: string;
+  action_index: number;
+  total_actions: number;
+  action_type: string;
+  status: 'running' | 'failed' | 'completed';
+  error?: string | null;
 }
 
 export const RecordingPlayer: React.FC<RecordingPlayerProps> = ({
@@ -16,10 +27,34 @@ export const RecordingPlayer: React.FC<RecordingPlayerProps> = ({
 }) => {
   const { showToast } = useToast();
   const [selectedProfileId, setSelectedProfileId] = useState('');
-  const [currentActionIndex, setCurrentActionIndex] = useState<number | null>(null);
   const [playing, setPlaying] = useState(false);
   const [completed, setCompleted] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [currentActionIndex, setCurrentActionIndex] = useState<number | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    const unlisten = listen<PlaybackProgressEvent>('recording-playback-progress', (event) => {
+      if (cancelled) return;
+      const payload = event.payload;
+      if (payload.recording_id !== recording.id) return;
+      if (selectedProfileId && payload.profile_id !== selectedProfileId) return;
+
+      if (payload.status === 'running') {
+        setCurrentActionIndex(payload.action_index);
+      } else if (payload.status === 'failed') {
+        setCurrentActionIndex(payload.action_index);
+        setError(payload.error ?? 'Playback failed');
+      } else if (payload.status === 'completed') {
+        setCurrentActionIndex(recording.actions.length > 0 ? recording.actions.length - 1 : null);
+      }
+    });
+
+    return () => {
+      cancelled = true;
+      unlisten.then((fn) => fn());
+    };
+  }, [recording.id, recording.actions.length, selectedProfileId]);
 
   const handlePlay = async () => {
     if (!selectedProfileId) {
@@ -28,65 +63,23 @@ export const RecordingPlayer: React.FC<RecordingPlayerProps> = ({
     }
 
     setPlaying(true);
+    setCompleted(false);
     setError(null);
     setCurrentActionIndex(0);
 
-    // Execute actions sequentially
-    for (let i = 0; i < recording.actions.length; i++) {
-      setCurrentActionIndex(i);
-      const action = recording.actions[i];
-
-      try {
-        await executeAction(action, selectedProfileId);
-      } catch (e) {
-        setError(`Action ${i + 1} failed: ${e}`);
-        showToast(`Action ${i + 1} failed: ${e}`, 'error');
-        break;
-      }
-    }
-
-    setPlaying(false);
-    setCompleted(true);
-    setCurrentActionIndex(null);
-  };
-
-  const executeAction = async (action: RecordedAction, profileId: string) => {
-    const config = await tauriApi.getMcpConfig();
-    if (!config?.enabled) throw new Error('API server not enabled');
-
-    const base = `http://127.0.0.1:${config.api_port}`;
-    const headers: Record<string, string> = {};
-    if (config.api_key) headers['X-API-Key'] = config.api_key;
-
-    const actionEndpoints: Record<string, string> = {
-      navigate: `/api/browser/${profileId}/navigate_wait`,
-      click: `/api/browser/${profileId}/click`,
-      type: `/api/browser/${profileId}/type`,
-      sleep: '/api/sleep', // Doesn't exist, simulate with delay
-    };
-
-    const endpoint = actionEndpoints[action.type];
-    if (!endpoint) {
-      throw new Error(`Action type ${action.type} not implemented`);
-    }
-
-    if (action.type === 'sleep') {
-      const duration = (action.params.duration_ms as number) || 1000;
-      await new Promise(resolve => setTimeout(resolve, duration));
-      return;
-    }
-
-    const response = await fetch(`${base}${endpoint}`, {
-      method: 'POST',
-      headers: {
-        ...headers,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(action.params),
-    });
-
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}`);
+    try {
+      const result = await tauriApi.playRecording(recording.id, selectedProfileId);
+      setCompleted(true);
+      showToast(
+        `Playback completed: ${result.completed_actions}/${result.total_actions} actions`,
+        'success'
+      );
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      setError(message);
+      showToast(message, 'error');
+    } finally {
+      setPlaying(false);
     }
   };
 
@@ -120,44 +113,46 @@ export const RecordingPlayer: React.FC<RecordingPlayerProps> = ({
               <div
                 className="progress-fill"
                 style={{
-                  width: currentActionIndex !== null
-                    ? `${((currentActionIndex + 1) / recording.actions.length) * 100}%`
-                    : '0%',
+                  width:
+                    completed
+                      ? '100%'
+                      : currentActionIndex !== null
+                        ? `${Math.min(((currentActionIndex + 1) / recording.actions.length) * 100, 100)}%`
+                        : playing
+                          ? '10%'
+                          : '0%',
                 }}
               />
             </div>
             <div className="progress-text">
-              {currentActionIndex !== null
-                ? `Action ${currentActionIndex + 1} of ${recording.actions.length}`
-                : 'Ready to play'}
+              {playing
+                ? currentActionIndex !== null
+                  ? `Action ${Math.min(currentActionIndex + 1, recording.actions.length)} of ${recording.actions.length}`
+                  : 'Playing in Rust backend...'
+                : completed
+                  ? `Completed ${recording.actions.length} actions`
+                  : 'Ready to play'}
             </div>
           </div>
 
           <div className="recording-actions-list">
-            {recording.actions.map((action, index) => {
-              const isCurrent = index === currentActionIndex;
-              const isPast = currentActionIndex !== null && index < currentActionIndex;
-
-              return (
-                <div
-                  key={index}
-                  className={`recorded-action-item ${isCurrent ? 'current' : ''} ${isPast ? 'done' : ''}`}
-                >
-                  <span className="action-number">{index + 1}</span>
-                  <span className="action-type">{action.type}</span>
-                  <span className="action-time">{action.timestamp_ms}ms</span>
-                  {isCurrent && <span className="action-status">Running...</span>}
-                  {isPast && <span className="action-status done">✓</span>}
-                </div>
-              );
-            })}
+            {recording.actions.map((action, index) => (
+              <div
+                key={index}
+                className={`recorded-action-item ${index === currentActionIndex ? 'current' : ''} ${((completed || (currentActionIndex !== null && index < currentActionIndex)) ? 'done' : '')}`}
+              >
+                <span className="action-number">{index + 1}</span>
+                <span className="action-type">{action.type}</span>
+                <span className="action-time">{action.timestamp_ms}ms</span>
+                {index === currentActionIndex && playing && <span className="action-status">Running...</span>}
+                {(completed || (currentActionIndex !== null && index < currentActionIndex)) && (
+                  <span className="action-status done">✓</span>
+                )}
+              </div>
+            ))}
           </div>
 
-          {error && (
-            <div className="error-message">
-              {error}
-            </div>
-          )}
+          {error && <div className="error-message">{error}</div>}
           {completed && !error && (
             <div className="success-message">
               Playback completed! {recording.actions.length} actions executed.
@@ -169,7 +164,7 @@ export const RecordingPlayer: React.FC<RecordingPlayerProps> = ({
           <button className="btn btn-secondary" onClick={onClose}>
             {completed ? 'Close' : 'Cancel'}
           </button>
-          {!completed && !playing && !error && (
+          {!completed && !playing && (
             <button
               className="btn btn-primary"
               onClick={handlePlay}

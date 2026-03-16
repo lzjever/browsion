@@ -1,5 +1,5 @@
 //! Integration tests for the local HTTP API.
-//! Tests profile CRUD, running browsers endpoint, browser control error paths, and MCP/API key auth.
+//! Tests profile CRUD, running browsers endpoint, browser control error paths, and local API key auth.
 
 use axum::http::StatusCode;
 use browsion_lib::api::{app, ApiState};
@@ -61,8 +61,12 @@ async fn test_api_list_profiles_empty() {
     let body = axum::body::to_bytes(res.into_body(), usize::MAX)
         .await
         .unwrap();
-    let json: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
-    assert!(json.is_empty());
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json.get("ok").and_then(|v| v.as_bool()), Some(true));
+    assert_eq!(
+        json.get("profiles").and_then(|v| v.as_array()).map(|v| v.len()),
+        Some(0)
+    );
 }
 
 #[tokio::test]
@@ -74,6 +78,13 @@ async fn test_api_get_profile_not_found() {
         .unwrap();
     let res = app.oneshot(req).await.unwrap();
     assert_eq!(res.status(), StatusCode::NOT_FOUND);
+    let body = axum::body::to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json.get("ok").and_then(|v| v.as_bool()), Some(false));
+    assert_eq!(
+        json.get("error").and_then(|v| v.get("code")).and_then(|v| v.as_str()),
+        Some("profile_not_found")
+    );
 }
 
 #[tokio::test]
@@ -99,6 +110,10 @@ async fn test_api_add_and_get_profile() {
         .unwrap();
     let res = api_app.oneshot(req).await.unwrap();
     assert_eq!(res.status(), StatusCode::CREATED);
+    let body = axum::body::to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    let created: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(created.get("ok").and_then(|v| v.as_bool()), Some(true));
+    assert_eq!(created["id"], "test-001");
 
     let api_app = app(state.clone(), None);
     let req = axum::http::Request::builder()
@@ -111,6 +126,7 @@ async fn test_api_add_and_get_profile() {
         .await
         .unwrap();
     let p: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(p.get("ok").and_then(|v| v.as_bool()), Some(true));
     assert_eq!(p["name"], "Test Profile");
 }
 
@@ -171,8 +187,12 @@ async fn test_api_running_browsers_empty() {
     let body = axum::body::to_bytes(res.into_body(), usize::MAX)
         .await
         .unwrap();
-    let json: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
-    assert!(json.is_empty());
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json.get("ok").and_then(|v| v.as_bool()), Some(true));
+    assert_eq!(
+        json.get("browsers").and_then(|v| v.as_array()).map(|v| v.len()),
+        Some(0)
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -190,6 +210,13 @@ async fn test_browser_navigate_not_running() {
         .unwrap();
     let res = app.oneshot(req).await.unwrap();
     assert_eq!(res.status(), StatusCode::CONFLICT);
+    let body = axum::body::to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json.get("ok").and_then(|v| v.as_bool()), Some(false));
+    assert_eq!(
+        json.get("error").and_then(|v| v.get("code")).and_then(|v| v.as_str()),
+        Some("browser_not_running")
+    );
 }
 
 #[tokio::test]
@@ -293,7 +320,7 @@ async fn test_list_profiles_includes_is_running() {
 }
 
 // ---------------------------------------------------------------------------
-// MCP / API key authentication
+// Local API key authentication
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -358,6 +385,36 @@ async fn test_api_running_unauthorized_without_key() {
 }
 
 #[tokio::test]
+async fn test_api_ws_unauthorized_without_key() {
+    let app = make_app_with_auth("ws-secret");
+    let req = axum::http::Request::builder()
+        .uri("/api/ws")
+        .header("connection", "upgrade")
+        .header("upgrade", "websocket")
+        .header("sec-websocket-version", "13")
+        .header("sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ==")
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn test_api_ws_accepts_query_api_key() {
+    let app = make_app_with_auth("ws-secret");
+    let req = axum::http::Request::builder()
+        .uri("/api/ws?api_key=ws-secret")
+        .header("connection", "upgrade")
+        .header("upgrade", "websocket")
+        .header("sec-websocket-version", "13")
+        .header("sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ==")
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_ne!(res.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
 async fn test_api_running_ok_with_correct_key() {
     let app = make_app_with_auth("my-api-key");
     let req = axum::http::Request::builder()
@@ -367,6 +424,37 @@ async fn test_api_running_ok_with_correct_key() {
         .unwrap();
     let res = app.oneshot(req).await.unwrap();
     assert_eq!(res.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn test_api_play_recording_not_found() {
+    let app = make_app_no_auth();
+    let req = axum::http::Request::builder()
+        .method("POST")
+        .uri("/api/recordings/missing-recording/play/test-profile")
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+    let body = axum::body::to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json.get("ok").and_then(|v| v.as_bool()), Some(false));
+    assert_eq!(
+        json.get("error").and_then(|v| v.get("message")).and_then(|v| v.as_str()),
+        Some("Recording not found")
+    );
+}
+
+#[tokio::test]
+async fn test_api_play_recording_unauthorized_without_key() {
+    let app = make_app_with_auth("playback-key");
+    let req = axum::http::Request::builder()
+        .method("POST")
+        .uri("/api/recordings/missing-recording/play/test-profile")
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
 }
 
 // ---------------------------------------------------------------------------

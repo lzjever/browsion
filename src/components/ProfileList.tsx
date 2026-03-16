@@ -59,7 +59,7 @@ export const ProfileList: React.FC<ProfileListProps> = ({ onEditProfile, onClone
   useEffect(() => {
     loadProfiles();
 
-    // Listen for real-time events from backend (MCP or tray actions)
+    // Listen for real-time events from backend (local API or tray actions)
     const unlistenProfiles = listen('profiles-changed', () => {
       loadProfiles();
     });
@@ -202,21 +202,12 @@ export const ProfileList: React.FC<ProfileListProps> = ({ onEditProfile, onClone
   };
 
   const handleStopRecording = async (name: string, description: string) => {
-    console.log('=== handleStopRecording called ===');
-    console.log('recordingDialog:', recordingDialog);
-    console.log('profile:', recordingDialog?.profile);
-    console.log('name:', name);
-    console.log('description:', description);
-
     if (!recordingDialog?.profile) {
-      console.error('ERROR: No profile in recordingDialog!');
       return;
     }
 
     try {
-      console.log('Calling tauriApi.stopRecording with:', recordingDialog.profile.id, name, description);
       await tauriApi.stopRecording(recordingDialog.profile.id, name, description);
-      console.log('stopRecording succeeded!');
       await loadRecordingSessions();
       setRecordingDialog(null);
       showToast('Recording saved', 'success');
@@ -335,10 +326,6 @@ const RecordingSaveDialog: React.FC<RecordingSaveDialogProps> = ({
   const [description, setDescription] = useState('');
 
   const handleSubmit = (e: React.FormEvent) => {
-    console.log('=== RecordingSaveDialog form submitted ===');
-    console.log('name:', name);
-    console.log('description:', description);
-    console.log('Calling onSave...');
     e.preventDefault();
     if (name.trim()) {
       onSave(name.trim(), description.trim());

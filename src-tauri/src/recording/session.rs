@@ -109,7 +109,7 @@ mod tests {
         let manager = RecordingSessionManager::new();
 
         // Start session
-        let session_id = manager.start_session("profile-1".to_string()).unwrap();
+        let _session_id = manager.start_session("profile-1".to_string()).unwrap();
         assert!(manager.is_recording("profile-1"));
 
         // Add action

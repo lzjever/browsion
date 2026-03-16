@@ -1,5 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
-import type { BrowserProfile, AppSettings, RunningStatus, McpConfig, McpToolInfo, ProxyPreset, SnapshotInfo, Workflow, WorkflowExecution, StepTypeInfo, Recording, RecordingSessionInfo } from '../types/profile';
+import type { BrowserProfile, AppSettings, RunningStatus, LocalApiConfig, ProxyPreset, SnapshotInfo, Recording, RecordingSessionInfo } from '../types/profile';
 import type { BrowserSource, CftVersionInfo } from '../types/profile';
 
 export const tauriApi = {
@@ -78,38 +78,13 @@ export const tauriApi = {
     return invoke('update_settings', { settings });
   },
 
-  // MCP / API Server
-  async getMcpConfig(): Promise<McpConfig> {
-    return invoke('get_mcp_config');
+  // Local API
+  async getLocalApiConfig(): Promise<LocalApiConfig> {
+    return invoke('get_local_api_config');
   },
 
-  async updateMcpConfig(mcp: McpConfig): Promise<void> {
-    return invoke('update_mcp_config', { mcp });
-  },
-
-  // MCP Tool Config Writer
-  async detectMcpTools(): Promise<McpToolInfo[]> {
-    return invoke('detect_mcp_tools');
-  },
-
-  async writeBrowsionToTool(
-    toolId: string,
-    binaryPath: string,
-    apiPort: number,
-    apiKey?: string,
-    projectDir?: string
-  ): Promise<string> {
-    return invoke('write_browsion_to_tool', {
-      toolId,
-      binaryPath,
-      projectDir: projectDir ?? null,
-      apiPort,
-      apiKey: apiKey ?? null,
-    });
-  },
-
-  async findMcpBinary(): Promise<string | null> {
-    return invoke('find_mcp_binary');
+  async updateLocalApiConfig(localApi: LocalApiConfig): Promise<void> {
+    return invoke('update_local_api_config', { localApi });
   },
 
   // Proxy presets
@@ -150,39 +125,6 @@ export const tauriApi = {
     return invoke('delete_snapshot', { profileId, name });
   },
 
-  // Workflows
-  async listWorkflows(): Promise<Workflow[]> {
-    return invoke('list_workflows');
-  },
-
-  async getWorkflow(id: string): Promise<Workflow> {
-    return invoke('get_workflow', { id });
-  },
-
-  async saveWorkflow(workflow: Workflow): Promise<Workflow> {
-    return invoke('save_workflow', { workflow });
-  },
-
-  async deleteWorkflow(id: string): Promise<void> {
-    return invoke('delete_workflow', { id });
-  },
-
-  async runWorkflow(
-    workflowId: string,
-    profileId: string,
-    variables: Record<string, unknown> = {}
-  ): Promise<WorkflowExecution> {
-    return invoke('run_workflow', { workflowId, profileId, variables });
-  },
-
-  async validateWorkflowStep(step: Record<string, unknown>): Promise<boolean> {
-    return invoke('validate_workflow_step', { step });
-  },
-
-  async getStepTypes(): Promise<StepTypeInfo[]> {
-    return invoke('get_step_types');
-  },
-
   // Recordings
   async listRecordings(): Promise<Recording[]> {
     return invoke('list_recordings');
@@ -200,8 +142,13 @@ export const tauriApi = {
     return invoke('delete_recording', { id });
   },
 
-  async recordingToWorkflow(recordingId: string, workflowName: string): Promise<Workflow> {
-    return invoke('recording_to_workflow', { recordingId, workflowName });
+  async playRecording(recordingId: string, profileId: string): Promise<{
+    recording_id: string;
+    profile_id: string;
+    completed_actions: number;
+    total_actions: number;
+  }> {
+    return invoke('play_recording', { recordingId, profileId });
   },
 
   // Real-time recording

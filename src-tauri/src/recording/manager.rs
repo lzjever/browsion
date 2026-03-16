@@ -123,7 +123,6 @@ impl Default for RecordingManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::recording::schema::RecordedActionType;
 
     #[test]
     fn test_recording_crud() {

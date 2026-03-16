@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import { tauriApi } from '../api/tauri';
-import type { AppSettings, BrowserSource, CftVersionInfo, ProxyPreset } from '../types/profile';
+import type { AppSettings, BrowserSource, CftVersionInfo, LocalApiConfig, ProxyPreset } from '../types/profile';
 import { open } from '@tauri-apps/plugin-dialog';
 import { UI_CONSTANTS } from './constants';
 
@@ -28,6 +28,12 @@ export const Settings: React.FC = () => {
     auto_start: false,
     minimize_to_tray: true,
   });
+  const [localApi, setLocalApi] = useState<LocalApiConfig>({
+    enabled: true,
+    api_port: 38472,
+    api_key: '',
+  });
+  const [localApiStatus, setLocalApiStatus] = useState<'unknown' | 'online' | 'offline'>('unknown');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [loadingVersions, setLoadingVersions] = useState(false);
@@ -79,14 +85,20 @@ export const Settings: React.FC = () => {
   const loadSettings = async () => {
     try {
       setLoading(true);
-      const [path, source, appSettings] = await Promise.all([
+      const [path, source, appSettings, localApiConfig] = await Promise.all([
         tauriApi.getChromePath(),
         tauriApi.getBrowserSource(),
         tauriApi.getSettings(),
+        tauriApi.getLocalApiConfig(),
       ]);
       setEffectivePath(path);
       setBrowserSource(source);
       setSettings(appSettings);
+      setLocalApi({
+        enabled: localApiConfig.enabled,
+        api_port: localApiConfig.api_port,
+        api_key: localApiConfig.api_key ?? '',
+      });
       if (source?.type === 'custom') {
         setCustomPath(source.path);
         setFingerprintChromium(source.fingerprint_chromium ?? false);
@@ -96,11 +108,22 @@ export const Settings: React.FC = () => {
         setCftVersion(source.version ?? '');
         setDownloadDir(source.download_dir ?? '');
       }
+      await checkLocalApiHealth(localApiConfig.api_port);
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
+      setLocalApiStatus('offline');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const checkLocalApiHealth = async (port: number) => {
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/api/health`);
+      setLocalApiStatus(response.ok ? 'online' : 'offline');
+    } catch {
+      setLocalApiStatus('offline');
     }
   };
 
@@ -276,6 +299,37 @@ export const Settings: React.FC = () => {
       setSettings(settings);
     }
   };
+
+  const handleSaveLocalApi = async () => {
+    try {
+      setSaving(true);
+      setError(null);
+      setSuccess(null);
+      const nextConfig: LocalApiConfig = {
+        enabled: localApi.enabled,
+        api_port: Number(localApi.api_port),
+        api_key: localApi.api_key?.trim() || undefined,
+      };
+      await tauriApi.updateLocalApiConfig(nextConfig);
+      setLocalApi({
+        enabled: nextConfig.enabled,
+        api_port: nextConfig.api_port,
+        api_key: nextConfig.api_key ?? '',
+      });
+      await checkLocalApiHealth(nextConfig.api_port);
+      setSuccess('Local API settings saved');
+      setTimeout(() => setSuccess(null), UI_CONSTANTS.SUCCESS_MESSAGE_DURATION_MS);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+      setLocalApiStatus('offline');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const curlHeaderExample = localApi.api_key?.trim()
+    ? ` -H "X-API-Key: ${localApi.api_key.trim()}"`
+    : '';
 
   if (loading) {
     return <div className="loading">Loading settings...</div>;
@@ -485,6 +539,88 @@ export const Settings: React.FC = () => {
               />
               <span>Minimize to tray when closing window</span>
             </label>
+          </div>
+        </div>
+
+        <div className="settings-section">
+          <h3>Local API</h3>
+          <p className="settings-hint">
+            Use curl or agents to control profile, browser, recording, and playback through the local HTTP API.
+          </p>
+
+          <div className="form-group checkbox-group">
+            <label>
+              <input
+                type="checkbox"
+                checked={localApi.enabled}
+                onChange={(e) => setLocalApi((prev) => ({ ...prev, enabled: e.target.checked }))}
+              />
+              <span>Enable local HTTP API</span>
+            </label>
+          </div>
+
+          <div className="form-group">
+            <label>API port</label>
+            <input
+              type="number"
+              min="1"
+              max="65535"
+              value={localApi.api_port}
+              onChange={(e) =>
+                setLocalApi((prev) => ({ ...prev, api_port: Number(e.target.value) || 0 }))
+              }
+            />
+          </div>
+
+          <div className="form-group">
+            <label>API key</label>
+            <input
+              type="text"
+              value={localApi.api_key ?? ''}
+              onChange={(e) => setLocalApi((prev) => ({ ...prev, api_key: e.target.value }))}
+              placeholder="Optional"
+            />
+          </div>
+
+          <div className="form-group">
+            <label>Status</label>
+            <div className={`effective-path-source ${localApiStatus}`}>
+              {localApi.enabled
+                ? localApiStatus === 'online'
+                  ? `Listening on 127.0.0.1:${localApi.api_port}`
+                  : 'Configured but not reachable'
+                : 'Disabled'}
+            </div>
+          </div>
+
+          <div className="button-row">
+            <button className="btn btn-primary" onClick={handleSaveLocalApi} disabled={saving}>
+              {saving ? 'Saving…' : 'Save Local API'}
+            </button>
+            <button
+              className="btn btn-secondary"
+              onClick={() => checkLocalApiHealth(localApi.api_port)}
+              disabled={!localApi.enabled}
+            >
+              Check health
+            </button>
+          </div>
+
+          <div className="form-group">
+            <label>Curl examples</label>
+            <textarea
+              readOnly
+              className="readonly"
+              rows={10}
+              value={[
+                `curl http://127.0.0.1:${localApi.api_port}/api/health`,
+                `curl${curlHeaderExample} http://127.0.0.1:${localApi.api_port}/api/profiles`,
+                `curl${curlHeaderExample} -X POST http://127.0.0.1:${localApi.api_port}/api/launch/<profile_id>`,
+                `curl${curlHeaderExample} -X POST http://127.0.0.1:${localApi.api_port}/api/browser/<profile_id>/navigate -H "Content-Type: application/json" -d '{"url":"https://google.com"}'`,
+                `curl${curlHeaderExample} -X POST http://127.0.0.1:${localApi.api_port}/api/recordings/start/<profile_id>`,
+                `curl${curlHeaderExample} -X POST http://127.0.0.1:${localApi.api_port}/api/recordings/<recording_id>/play/<profile_id>`,
+              ].join('\n')}
+            />
           </div>
         </div>
 

@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-/// DOM element info for context (e.g. for MCP tools).
+/// DOM element info for automation context.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DOMElement {
     /// Tag name
@@ -33,7 +33,7 @@ pub struct DOMElement {
     pub clickable: bool,
 }
 
-/// Simplified DOM structure (for MCP / automation context).
+/// Simplified DOM structure for automation context.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DOMContext {
     /// Current URL

@@ -48,17 +48,6 @@ export const RecordingList: React.FC<RecordingListProps> = ({ profiles }) => {
     });
   };
 
-  const handleConvertToWorkflow = async (recording: Recording) => {
-    try {
-      const workflowName = `Workflow from ${recording.name}`;
-      const workflow = await tauriApi.recordingToWorkflow(recording.id, workflowName);
-      await tauriApi.saveWorkflow(workflow);
-      showToast('Workflow created successfully! Check the Workflows tab.', 'success');
-    } catch (e) {
-      showToast(`Failed to create workflow: ${e}`, 'error');
-    }
-  };
-
   const formatDuration = (ms: number) => {
     if (ms < 1000) return `${ms}ms`;
     const seconds = Math.floor(ms / 1000);
@@ -79,7 +68,6 @@ export const RecordingList: React.FC<RecordingListProps> = ({ profiles }) => {
         <div className="recording-empty-state">
           <p className="muted">No recordings yet.</p>
           <p className="muted">Recordings will be captured when you use browser automation.</p>
-          <p className="muted">You can also convert recordings to workflows for reuse.</p>
         </div>
       ) : (
         <div className="recording-grid">
@@ -104,12 +92,6 @@ export const RecordingList: React.FC<RecordingListProps> = ({ profiles }) => {
                   onClick={() => setPlayingRecording(recording)}
                 >
                   ▶ Play
-                </button>
-                <button
-                  className="btn btn-secondary btn-sm"
-                  onClick={() => handleConvertToWorkflow(recording)}
-                >
-                  Convert to Workflow
                 </button>
                 <button
                   className="btn btn-danger-outline btn-sm"

@@ -99,3 +99,16 @@ async fn test_effective_chrome_path_custom_valid_succeeds() {
     assert!(result.is_ok());
     assert_eq!(result.unwrap(), current_exe);
 }
+
+#[tokio::test]
+async fn test_effective_chrome_path_legacy_chrome_path_fallback_succeeds() {
+    let current_exe = std::env::current_exe().unwrap();
+    let config = AppConfig {
+        chrome_path: Some(current_exe.clone()),
+        ..AppConfig::default()
+    };
+
+    let result = browsion_lib::commands::get_effective_chrome_path_from_config(&config).await;
+    assert!(result.is_ok());
+    assert_eq!(result.unwrap(), current_exe);
+}

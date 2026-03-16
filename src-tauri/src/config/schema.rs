@@ -90,7 +90,7 @@ pub struct AppConfig {
     #[serde(default)]
     pub recent_profiles: Vec<String>,
 
-    /// MCP / API server configuration.
+    /// Local HTTP API configuration.
     #[serde(default)]
     pub mcp: McpConfig,
 
@@ -118,7 +118,7 @@ impl Default for AppConfig {
     }
 }
 
-/// MCP / API server configuration.
+/// Local HTTP API configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct McpConfig {
     /// Whether the API server is enabled.

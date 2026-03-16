@@ -10,7 +10,6 @@ pub mod recording;
 pub mod state;
 pub mod tray;
 pub mod window;
-pub mod workflow;
 
 use std::sync::Arc;
 use state::AppState;
@@ -40,7 +39,7 @@ pub fn run() {
             // Inject app handle so HTTP API handlers can emit events to frontend
             *state.app_handle.lock() = Some(app.handle().clone());
 
-            // Start local HTTP API if MCP config says enabled
+            // Start local HTTP API if enabled in config
             let mcp = &config.mcp;
             if mcp.enabled && mcp.api_port > 0 {
                 let state_clone = std::sync::Arc::clone(&state);
@@ -160,9 +159,8 @@ pub fn run() {
             commands::get_recent_profiles,
             commands::get_mcp_config,
             commands::update_mcp_config,
-            commands::mcp_tools::detect_mcp_tools,
-            commands::mcp_tools::write_browsion_to_tool,
-            commands::mcp_tools::find_mcp_binary,
+            commands::get_local_api_config,
+            commands::update_local_api_config,
             commands::proxy::get_proxy_presets,
             commands::proxy::add_proxy_preset,
             commands::proxy::update_proxy_preset,
@@ -172,18 +170,11 @@ pub fn run() {
             commands::snapshots::create_snapshot,
             commands::snapshots::restore_snapshot,
             commands::snapshots::delete_snapshot,
-            commands::workflow::list_workflows,
-            commands::workflow::get_workflow,
-            commands::workflow::save_workflow,
-            commands::workflow::delete_workflow,
-            commands::workflow::run_workflow,
-            commands::workflow::validate_workflow_step,
-            commands::workflow::get_step_types,
             commands::recording::list_recordings,
             commands::recording::get_recording,
             commands::recording::save_recording,
             commands::recording::delete_recording,
-            commands::recording::recording_to_workflow,
+            commands::recording::play_recording,
             commands::recording::start_recording,
             commands::recording::stop_recording,
             commands::recording::get_active_recording_sessions,
@@ -195,20 +186,27 @@ pub fn run() {
 }
 
 #[cfg(test)]
-mod mcp_command_tests {
+mod local_api_command_tests {
     use super::*;
-    use crate::commands::{get_mcp_config, update_mcp_config};
+    use crate::commands::{
+        get_local_api_config, get_mcp_config, update_local_api_config, update_mcp_config,
+    };
     use crate::config::schema::McpConfig;
     use crate::config::AppConfig;
     use std::sync::Arc;
     use tauri::test::{assert_ipc_response, get_ipc_response, mock_builder, mock_context, noop_assets, INVOKE_KEY};
     use tauri::WebviewWindowBuilder;
 
-    fn create_app_with_mcp_state(config: AppConfig) -> tauri::App<tauri::test::MockRuntime> {
+    fn create_app_with_local_api_state(config: AppConfig) -> tauri::App<tauri::test::MockRuntime> {
         let state = Arc::new(AppState::new(config));
         mock_builder()
             .manage(state)
-            .invoke_handler(tauri::generate_handler![get_mcp_config, update_mcp_config])
+            .invoke_handler(tauri::generate_handler![
+                get_mcp_config,
+                update_mcp_config,
+                get_local_api_config,
+                update_local_api_config
+            ])
             .build(mock_context(noop_assets()))
             .expect("failed to build app")
     }
@@ -227,7 +225,7 @@ mod mcp_command_tests {
 
     #[test]
     fn test_get_mcp_config_returns_default() {
-        let app = create_app_with_mcp_state(AppConfig::default());
+        let app = create_app_with_local_api_state(AppConfig::default());
         let webview = WebviewWindowBuilder::new(&app, "main", Default::default())
             .build()
             .unwrap();
@@ -239,7 +237,7 @@ mod mcp_command_tests {
 
     #[test]
     fn test_get_mcp_config_deserialize_response() {
-        let app = create_app_with_mcp_state(AppConfig::default());
+        let app = create_app_with_local_api_state(AppConfig::default());
         let webview = WebviewWindowBuilder::new(&app, "main", Default::default())
             .build()
             .unwrap();

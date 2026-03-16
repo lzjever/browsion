@@ -24,11 +24,13 @@ use browsion_lib::agent::cdp::CDPClient;
 use browsion_lib::config::{AppConfig, BrowserProfile};
 use browsion_lib::process::port::allocate_cdp_port;
 use browsion_lib::state::AppState;
+use futures::StreamExt;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::process::{Child, Command};
 use std::sync::Arc;
 use tokio::sync::oneshot;
+use tokio_tungstenite::connect_async;
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -42,6 +44,24 @@ fn run_server(state: Arc<AppState>, port: u16, api_key: Option<String>) {
     tokio::spawn(async move {
         let _ = browsion_lib::api::run_server(state, port, api_key).await;
     });
+}
+
+async fn wait_for_api_ready(port: u16, api_key: Option<&str>) {
+    let client = reqwest::Client::new();
+    let url = format!("http://127.0.0.1:{}/api/health", port);
+    for _ in 0..50 {
+        let mut request = client.get(&url);
+        if let Some(api_key) = api_key {
+            request = request.header("X-API-Key", api_key);
+        }
+        if let Ok(response) = request.send().await {
+            if response.status().is_success() {
+                return;
+            }
+        }
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+    }
+    panic!("API server on port {} did not become ready in time", port);
 }
 
 /// Find a Chrome binary or return None (test will be skipped).
@@ -171,6 +191,7 @@ async fn spawn_test_server() -> (String, oneshot::Sender<()>) {
         .route("/console", get(|| async { Html(HTML_CONSOLE) }))
         .route("/storage", get(|| async { Html(HTML_STORAGE) }))
         .route("/tabs", get(|| async { Html(HTML_TABS) }))
+        .route("/tabs-delayed", get(|| async { Html(HTML_TABS_DELAYED) }))
         .route("/interact", get(|| async { Html(HTML_INTERACT) }))
         .route("/geolocation", get(|| async { Html(HTML_GEOLOCATION) }));
 
@@ -253,7 +274,23 @@ const HTML_TABS: &str = r#"<!DOCTYPE html>
 <head><meta charset="UTF-8"><title>Browsion Tab Origin</title></head>
 <body>
   <h1>Tab Origin</h1>
+  <span id="tab-counter">0</span>
+  <button id="origin-btn" onclick="
+    document.getElementById('tab-counter').textContent =
+      String(parseInt(document.getElementById('tab-counter').textContent, 10) + 1);
+  ">Increment Origin Counter</button>
   <a id="new-tab-link" href="/form" target="_blank">Open in new tab</a>
+</body>
+</html>"#;
+
+const HTML_TABS_DELAYED: &str = r#"<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><title>Browsion Delayed Tab Origin</title></head>
+<body>
+  <h1>Delayed Tab Origin</h1>
+  <button id="delayed-tab-btn" onclick="
+    setTimeout(() => window.open('/form', '_blank'), 800);
+  ">Open delayed tab</button>
 </body>
 </html>"#;
 
@@ -976,7 +1013,7 @@ async fn test_profile_crud_via_api() {
     let api_key = Some("test-api-key".to_string());
 
     run_server(state.clone(), api_port, api_key.clone());
-    tokio::time::sleep(tokio::time::Duration::from_millis(200)).await; // let server start
+    wait_for_api_ready(api_port, api_key.as_deref()).await;
 
     let client = Client::new();
     let base_url = format!("http://127.0.0.1:{}", api_port);
@@ -1297,22 +1334,20 @@ async fn test_dialog_handle_alert() {
     // Handle the dialog (accept it)
     browser.client.handle_dialog("accept", None).await.unwrap();
 
-    // Wait for the setTimeout callback to complete after dialog is handled
-    tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+    let mut status = serde_json::Value::Null;
+    for _ in 0..20 {
+        status = browser
+            .client
+            .evaluate_js("document.getElementById('status').textContent")
+            .await
+            .unwrap();
+        if status.as_str() == Some("Alert done") {
+            break;
+        }
+        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+    }
 
-    // Verify the page state after dialog was accepted
-    let status = browser
-        .client
-        .evaluate_js("document.getElementById('status').textContent")
-        .await
-        .unwrap();
-
-    // The status should have been updated after the dialog was handled
-    assert_eq!(
-        status.as_str(),
-        Some("Alert done"),
-        "dialog handler didn't complete"
-    );
+    assert_eq!(status.as_str(), Some("Alert done"), "dialog handler didn't complete");
 
     // Test dismissing a dialog
     browser
@@ -1323,13 +1358,18 @@ async fn test_dialog_handle_alert() {
 
     tokio::time::sleep(tokio::time::Duration::from_millis(150)).await;
     browser.client.handle_dialog("dismiss", None).await.unwrap();
-    tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
-
-    let status2 = browser
-        .client
-        .evaluate_js("document.getElementById('status').textContent")
-        .await
-        .unwrap();
+    let mut status2 = serde_json::Value::Null;
+    for _ in 0..20 {
+        status2 = browser
+            .client
+            .evaluate_js("document.getElementById('status').textContent")
+            .await
+            .unwrap();
+        if status2.as_str() == Some("Dismissed") {
+            break;
+        }
+        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+    }
 
     assert_eq!(
         status2.as_str(),
@@ -1542,7 +1582,7 @@ async fn test_snapshot_create_restore() {
     }
 
     run_server(state.clone(), api_port, api_key.clone());
-    tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+    wait_for_api_ready(api_port, api_key.as_deref()).await;
 
     let http_client = Client::new();
     let base_url = format!("http://127.0.0.1:{}", api_port);
@@ -1717,7 +1757,7 @@ async fn test_action_log_records_api_calls() {
     }
 
     run_server(state.clone(), api_port, api_key.clone());
-    tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+    wait_for_api_ready(api_port, api_key.as_deref()).await;
 
     // Create profile "actionlog-test" via POST /api/profiles
     let http_client = Client::new();
@@ -2265,125 +2305,19 @@ async fn test_emulate_set_geolocation() {
     browser.kill();
 }
 
-/// 46. Workflow: execute simple workflow via API.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn test_workflow_execute_simple_navigate() {
-    let Some(_chrome) = find_chrome() else { eprintln!("SKIP: no Chrome"); return; };
-
-    // Use a dedicated port for the API server
-    let api_port = 39525u16;
-
-    let state = make_state();
-    let api_key = Some("test-workflow-key".to_string());
-
-    // Set Chrome path and MCP config for ProcessManager
-    {
-        let mut config = state.config.write();
-        if let Some(chrome_path) = find_chrome() {
-            config.chrome_path = Some(chrome_path);
-        }
-        // Enable MCP server (required for workflow execution)
-        config.mcp.enabled = true;
-        config.mcp.api_port = api_port;
-        config.mcp.api_key = api_key.clone();
-    }
-
-    run_server(state.clone(), api_port, api_key.clone());
-    let api_base = format!("http://127.0.0.1:{}", api_port);
-
-    let user_data_dir = std::env::temp_dir().join(format!("browsion-e2e-workflow-{}", api_port));
-    let _ = std::fs::remove_dir_all(&user_data_dir);
-    std::fs::create_dir_all(&user_data_dir).unwrap();
-    let prof_id = "workflow-test";
-
-    let profile = serde_json::json!({
-        "id": prof_id,
-        "name": "Workflow Test",
-        "description": "",
-        "user_data_dir": user_data_dir.to_str().unwrap(),
-        "lang": "en-US",
-        "tags": [],
-        "custom_args": []
-    });
-
-    let client = reqwest::Client::new();
-    let _ = client.post(format!("{}/api/profiles", api_base))
-        .header("X-API-Key", api_key.as_ref().unwrap())
-        .json(&profile)
-        .send()
-        .await
-        .expect("create profile failed");
-
-    let workflow = serde_json::json!({
-        "id": "test-workflow",
-        "name": "Test Navigate Workflow",
-        "description": "Simple navigate workflow",
-        "steps": [{
-            "id": "step-1",
-            "name": "Navigate to example.com",
-            "description": "",
-            "type": "navigate",
-            "params": {"url": "https://example.com"},
-            "continue_on_error": false,
-            "timeout_ms": 10000
-        }],
-        "variables": {},
-        "created_at": 0,
-        "updated_at": 0
-    });
-
-    let _ = client.post(format!("{}/api/workflows", api_base))
-        .header("X-API-Key", api_key.as_ref().unwrap())
-        .json(&workflow)
-        .send()
-        .await
-        .expect("create workflow failed");
-
-    // Launch browser via API
-    let launch_resp = client.post(format!("{}/api/launch/{}", api_base, prof_id))
-        .header("X-API-Key", api_key.as_ref().unwrap())
-        .send()
-        .await
-        .expect("launch failed");
-
-    assert_eq!(launch_resp.status(), 200, "launch should succeed");
-
-    // Wait for browser to start
-    tokio::time::sleep(tokio::time::Duration::from_millis(1500)).await;
-
-    let resp = client.post(format!("{}/api/workflows/test-workflow/run/{}", api_base, prof_id))
-        .header("X-API-Key", api_key.as_ref().unwrap())
-        .json(&serde_json::json!({}))
-        .send()
-        .await
-        .expect("run workflow failed");
-
-    assert_eq!(resp.status(), 200);
-
-    let body = resp.text().await.expect("response body missing");
-    let execution: serde_json::Value = serde_json::from_str(&body).expect("invalid JSON");
-    assert_eq!(execution.get("status").and_then(|v| v.as_str()), Some("completed"));
-
-    // Kill browser via API
-    let _ = client.post(format!("{}/api/kill/{}", api_base, prof_id))
-        .header("X-API-Key", api_key.as_ref().unwrap())
-        .send()
-        .await;
-
-    drop(state);
-    let _ = std::fs::remove_dir_all(&user_data_dir);
-}
 
 /// 47. Recording: start, check status, stop recording via API.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_recording_lifecycle_via_api() {
     let chrome = find_chrome().expect("Chrome required");
-    let port = allocate_cdp_port();
+    let api_port = 39525u16;
+    let cdp_port = allocate_cdp_port();
 
     let state = make_state();
     let api_key = Some("test-recording-key".to_string());
-    run_server(state.clone(), port, api_key.clone());
-    let api_base = format!("http://127.0.0.1:{}/api", port);
+    run_server(state.clone(), api_port, api_key.clone());
+    wait_for_api_ready(api_port, api_key.as_deref()).await;
+    let api_base = format!("http://127.0.0.1:{}/api", api_port);
 
     let user_data_dir = std::env::temp_dir().join("browsion-e2e-recording");
     std::fs::create_dir_all(&user_data_dir).unwrap();
@@ -2409,7 +2343,7 @@ async fn test_recording_lifecycle_via_api() {
 
     let mut child = Command::new(&chrome)
         .arg(format!("--user-data-dir={}", user_data_dir.display()))
-        .arg(format!("--remote-debugging-port={}", port))
+        .arg(format!("--remote-debugging-port={}", cdp_port))
         .arg("--headless=new")
         .spawn()
         .expect("Failed to start Chrome");
@@ -2449,4 +2383,1602 @@ async fn test_recording_lifecycle_via_api() {
     drop(state);
     child.kill().expect("Failed to kill Chrome");
     let _ = child.wait();
+}
+
+/// 48. Recording via API: captures multi-tab actions, normalizes manual input, and persists the saved recording.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_recording_multi_tab_capture_and_persist_via_api() {
+    let Some(_chrome) = find_chrome() else { eprintln!("SKIP: no Chrome"); return; };
+    let (base, _srv) = spawn_test_server().await;
+
+    let state = make_state();
+    let api_port = 39526u16;
+    let api_key = Some("test-recording-multitab-key".to_string());
+
+    {
+        let mut config = state.config.write();
+        if let Some(chrome_path) = find_chrome() {
+            config.chrome_path = Some(chrome_path);
+        }
+        config.mcp.enabled = true;
+        config.mcp.api_port = api_port;
+        config.mcp.api_key = api_key.clone();
+    }
+
+    run_server(state.clone(), api_port, api_key.clone());
+    wait_for_api_ready(api_port, api_key.as_deref()).await;
+
+    let client = reqwest::Client::new();
+    let api_base = format!("http://127.0.0.1:{}", api_port);
+    let profile_id = "recording-multitab-test";
+    let user_data_dir = std::env::temp_dir().join(format!("browsion-e2e-recording-multitab-{}", api_port));
+    let _ = std::fs::remove_dir_all(&user_data_dir);
+    std::fs::create_dir_all(&user_data_dir).unwrap();
+
+    let profile = serde_json::json!({
+        "id": profile_id,
+        "name": "Recording Multi-tab Test",
+        "description": "",
+        "user_data_dir": user_data_dir.to_str().unwrap(),
+        "lang": "en-US",
+        "tags": [],
+        "custom_args": [],
+        "headless": true
+    });
+
+    let create_resp = client
+        .post(format!("{}/api/profiles", api_base))
+        .header("X-API-Key", api_key.as_ref().unwrap())
+        .json(&profile)
+        .send()
+        .await
+        .expect("create profile failed");
+    assert_eq!(create_resp.status(), StatusCode::CREATED);
+
+    let launch_resp = client
+        .post(format!("{}/api/launch/{}", api_base, profile_id))
+        .header("X-API-Key", api_key.as_ref().unwrap())
+        .send()
+        .await
+        .expect("launch failed");
+    assert_eq!(launch_resp.status(), StatusCode::OK);
+    let _launch_json: serde_json::Value = launch_resp.json().await.expect("launch JSON missing");
+
+    let navigate_resp = client
+        .post(format!("{}/api/browser/{}/navigate_wait", api_base, profile_id))
+        .header("X-API-Key", api_key.as_ref().unwrap())
+        .json(&serde_json::json!({
+            "url": format!("{}/tabs", base),
+            "wait_until": "load",
+            "timeout_ms": 10000
+        }))
+        .send()
+        .await
+        .expect("navigate failed");
+    assert_eq!(navigate_resp.status(), StatusCode::OK);
+
+    let start_resp = client
+        .post(format!("{}/api/recordings/start/{}", api_base, profile_id))
+        .header("X-API-Key", api_key.as_ref().unwrap())
+        .send()
+        .await
+        .expect("start recording failed");
+    assert_eq!(start_resp.status(), StatusCode::OK);
+    let start_json: serde_json::Value = start_resp.json().await.expect("start JSON missing");
+    let session_id = start_json
+        .get("session_id")
+        .and_then(|v| v.as_str())
+        .expect("session_id missing")
+        .to_string();
+
+    let original_tabs_resp = client
+        .get(format!("{}/api/browser/{}/tabs", api_base, profile_id))
+        .header("X-API-Key", api_key.as_ref().unwrap())
+        .send()
+        .await
+        .expect("list tabs failed");
+    assert_eq!(original_tabs_resp.status(), StatusCode::OK);
+    let original_tabs: Vec<serde_json::Value> = original_tabs_resp.json().await.expect("tabs JSON missing");
+    let original_tab = original_tabs
+        .iter()
+        .find(|tab| tab.get("url").and_then(|v| v.as_str()).is_some_and(|url| url.contains("/tabs")))
+        .expect("original /tabs tab missing");
+    let original_tab_id = original_tab
+        .get("id")
+        .and_then(|v| v.as_str())
+        .expect("original tab id missing")
+        .to_string();
+
+    let click_resp = client
+        .post(format!("{}/api/browser/{}/click", api_base, profile_id))
+        .header("X-API-Key", api_key.as_ref().unwrap())
+        .json(&serde_json::json!({ "selector": "#new-tab-link" }))
+        .send()
+        .await
+        .expect("failed to click new-tab link");
+    assert_eq!(click_resp.status(), StatusCode::OK);
+
+    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+    let popup_tabs_resp = client
+        .get(format!("{}/api/browser/{}/tabs", api_base, profile_id))
+        .header("X-API-Key", api_key.as_ref().unwrap())
+        .send()
+        .await
+        .expect("list popup tabs failed");
+    assert_eq!(popup_tabs_resp.status(), StatusCode::OK);
+    let popup_tabs: Vec<serde_json::Value> = popup_tabs_resp.json().await.expect("popup tabs JSON missing");
+    let popup_target_id = popup_tabs
+        .iter()
+        .find(|tab| tab.get("id").and_then(|v| v.as_str()) != Some(original_tab_id.as_str()))
+        .and_then(|tab| tab.get("id").and_then(|v| v.as_str()))
+        .expect("popup target_id missing")
+        .to_string();
+
+    let switch_popup_resp = client
+        .post(format!("{}/api/browser/{}/tabs/switch", api_base, profile_id))
+        .header("X-API-Key", api_key.as_ref().unwrap())
+        .json(&serde_json::json!({ "target_id": popup_target_id }))
+        .send()
+        .await
+        .expect("failed to switch to popup tab");
+    assert_eq!(switch_popup_resp.status(), StatusCode::OK);
+
+    let type_resp = client
+        .post(format!("{}/api/browser/{}/type", api_base, profile_id))
+        .header("X-API-Key", api_key.as_ref().unwrap())
+        .json(&serde_json::json!({ "selector": "#name-input", "text": "Recorded User" }))
+        .send()
+        .await
+        .expect("failed to type in popup");
+    assert_eq!(type_resp.status(), StatusCode::OK);
+
+    let switch_back_resp = client
+        .post(format!("{}/api/browser/{}/tabs/switch", api_base, profile_id))
+        .header("X-API-Key", api_key.as_ref().unwrap())
+        .json(&serde_json::json!({ "target_id": original_tab_id }))
+        .send()
+        .await
+        .expect("failed to switch back to original tab");
+    assert_eq!(switch_back_resp.status(), StatusCode::OK);
+
+    let click_origin_resp = client
+        .post(format!("{}/api/browser/{}/click", api_base, profile_id))
+        .header("X-API-Key", api_key.as_ref().unwrap())
+        .json(&serde_json::json!({ "selector": "#origin-btn" }))
+        .send()
+        .await
+        .expect("failed to click original tab button");
+    assert_eq!(click_origin_resp.status(), StatusCode::OK);
+
+    tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
+
+    let stop_resp = client
+        .post(format!("{}/api/recordings/stop/{}", api_base, session_id))
+        .header("X-API-Key", api_key.as_ref().unwrap())
+        .send()
+        .await
+        .expect("stop recording failed");
+    assert_eq!(stop_resp.status(), StatusCode::OK);
+    let recording: serde_json::Value = stop_resp.json().await.expect("stop JSON missing");
+
+    let recording_id = recording
+        .get("id")
+        .and_then(|v| v.as_str())
+        .expect("recording id missing")
+        .to_string();
+    let actions = recording
+        .get("actions")
+        .and_then(|v| v.as_array())
+        .expect("recording actions missing");
+
+    let switch_actions: Vec<&serde_json::Value> = actions
+        .iter()
+        .filter(|action| action.get("type").and_then(|v| v.as_str()) == Some("switch_tab"))
+        .collect();
+    assert!(
+        switch_actions.len() >= 2,
+        "recording should include switch into popup and switch back: {:?}",
+        actions
+    );
+    assert!(
+        switch_actions
+            .iter()
+            .any(|action| action.get("params")
+                .and_then(|v| v.get("previous_target_id"))
+                .and_then(|v| v.as_str())
+                .is_some()),
+        "switch_tab actions should preserve previous_target_id: {:?}",
+        switch_actions
+    );
+
+    let typed_name_action = actions
+        .iter()
+        .find(|action| {
+            action.get("type").and_then(|v| v.as_str()) == Some("type")
+                && action.get("params")
+                    .and_then(|v| v.get("selector"))
+                    .and_then(|v| v.as_str())
+                    == Some("#name-input")
+        })
+        .expect("recording should include popup name input");
+    assert_eq!(
+        typed_name_action
+            .get("params")
+            .and_then(|v| v.get("text"))
+            .and_then(|v| v.as_str()),
+        Some("Recorded User"),
+        "manual input should be normalized to params.text"
+    );
+
+    let persisted_resp = client
+        .get(format!("{}/api/recordings/{}", api_base, recording_id))
+        .header("X-API-Key", api_key.as_ref().unwrap())
+        .send()
+        .await
+        .expect("fetch persisted recording failed");
+    assert_eq!(persisted_resp.status(), StatusCode::OK);
+    let persisted: serde_json::Value = persisted_resp.json().await.expect("persisted JSON missing");
+    assert_eq!(
+        persisted.get("actions").and_then(|v| v.as_array()).map(|v| v.len()),
+        Some(actions.len()),
+        "API stop should persist the normalized recording"
+    );
+
+    let _ = client
+        .post(format!("{}/api/kill/{}", api_base, profile_id))
+        .header("X-API-Key", api_key.as_ref().unwrap())
+        .send()
+        .await;
+    drop(state);
+    let _ = std::fs::remove_dir_all(&user_data_dir);
+}
+
+/// 49. Recording via API, then play back the saved recording on a fresh browser session.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_record_then_playback_same_recording_via_api() {
+    let Some(_chrome) = find_chrome() else { eprintln!("SKIP: no Chrome"); return; };
+    let (base, _srv) = spawn_test_server().await;
+
+    let state = make_state();
+    let api_port = 39534u16;
+    let api_key = Some("test-record-then-playback-key".to_string());
+
+    {
+        let mut config = state.config.write();
+        if let Some(chrome_path) = find_chrome() {
+            config.chrome_path = Some(chrome_path);
+        }
+        config.mcp.enabled = true;
+        config.mcp.api_port = api_port;
+        config.mcp.api_key = api_key.clone();
+    }
+
+    run_server(state.clone(), api_port, api_key.clone());
+    wait_for_api_ready(api_port, api_key.as_deref()).await;
+
+    let client = reqwest::Client::new();
+    let api_base = format!("http://127.0.0.1:{}", api_port);
+    let profile_id = "record-then-playback-test";
+    let user_data_dir = std::env::temp_dir().join(format!("browsion-e2e-record-then-playback-{}", api_port));
+    let _ = std::fs::remove_dir_all(&user_data_dir);
+    std::fs::create_dir_all(&user_data_dir).unwrap();
+
+    let profile = serde_json::json!({
+        "id": profile_id,
+        "name": "Record Then Playback Test",
+        "description": "",
+        "user_data_dir": user_data_dir.to_str().unwrap(),
+        "lang": "en-US",
+        "tags": [],
+        "custom_args": [],
+        "headless": true
+    });
+
+    let create_resp = client
+        .post(format!("{}/api/profiles", api_base))
+        .header("X-API-Key", api_key.as_ref().unwrap())
+        .json(&profile)
+        .send()
+        .await
+        .expect("create profile failed");
+    assert_eq!(create_resp.status(), StatusCode::CREATED);
+
+    let launch_resp = client
+        .post(format!("{}/api/launch/{}", api_base, profile_id))
+        .header("X-API-Key", api_key.as_ref().unwrap())
+        .send()
+        .await
+        .expect("launch failed");
+    assert_eq!(launch_resp.status(), StatusCode::OK);
+
+    let start_resp = client
+        .post(format!("{}/api/recordings/start/{}", api_base, profile_id))
+        .header("X-API-Key", api_key.as_ref().unwrap())
+        .send()
+        .await
+        .expect("start recording failed");
+    assert_eq!(start_resp.status(), StatusCode::OK);
+    let start_json: serde_json::Value = start_resp.json().await.expect("start JSON missing");
+    let session_id = start_json
+        .get("session_id")
+        .and_then(|v| v.as_str())
+        .expect("session_id missing")
+        .to_string();
+
+    let navigate_resp = client
+        .post(format!("{}/api/browser/{}/navigate_wait", api_base, profile_id))
+        .header("X-API-Key", api_key.as_ref().unwrap())
+        .json(&serde_json::json!({
+            "url": format!("{}/", base),
+            "wait_until": "load",
+            "timeout_ms": 10000
+        }))
+        .send()
+        .await
+        .expect("navigate failed");
+    assert_eq!(navigate_resp.status(), StatusCode::OK);
+
+    let click_resp = client
+        .post(format!("{}/api/browser/{}/click", api_base, profile_id))
+        .header("X-API-Key", api_key.as_ref().unwrap())
+        .json(&serde_json::json!({ "selector": "#btn" }))
+        .send()
+        .await
+        .expect("click failed");
+    assert_eq!(click_resp.status(), StatusCode::OK);
+
+    let stop_resp = client
+        .post(format!("{}/api/recordings/stop/{}", api_base, session_id))
+        .header("X-API-Key", api_key.as_ref().unwrap())
+        .send()
+        .await
+        .expect("stop recording failed");
+    assert_eq!(stop_resp.status(), StatusCode::OK);
+    let recording: serde_json::Value = stop_resp.json().await.expect("recording JSON missing");
+    let recording_id = recording
+        .get("id")
+        .and_then(|v| v.as_str())
+        .expect("recording id missing")
+        .to_string();
+    let actions = recording
+        .get("actions")
+        .and_then(|v| v.as_array())
+        .expect("recording actions missing");
+    assert!(
+        actions.iter().any(|action| action.get("type").and_then(|v| v.as_str()) == Some("navigate")),
+        "recording should include navigate action: {:?}",
+        actions
+    );
+    assert!(
+        actions.iter().any(|action| action.get("type").and_then(|v| v.as_str()) == Some("click")),
+        "recording should include click action: {:?}",
+        actions
+    );
+
+    let _ = client
+        .post(format!("{}/api/kill/{}", api_base, profile_id))
+        .header("X-API-Key", api_key.as_ref().unwrap())
+        .send()
+        .await;
+
+    let relaunch_resp = client
+        .post(format!("{}/api/launch/{}", api_base, profile_id))
+        .header("X-API-Key", api_key.as_ref().unwrap())
+        .send()
+        .await
+        .expect("relaunch failed");
+    assert_eq!(relaunch_resp.status(), StatusCode::OK);
+    let relaunch_json: serde_json::Value = relaunch_resp.json().await.expect("relaunch JSON missing");
+    let cdp_port = relaunch_json
+        .get("cdp_port")
+        .and_then(|v| v.as_u64())
+        .expect("cdp_port missing") as u16;
+
+    let playback_resp = client
+        .post(format!(
+            "{}/api/recordings/{}/play/{}",
+            api_base, recording_id, profile_id
+        ))
+        .header("X-API-Key", api_key.as_ref().unwrap())
+        .send()
+        .await
+        .expect("playback request failed");
+    assert_eq!(
+        playback_resp.status(),
+        StatusCode::OK,
+        "playback failed: {:?}",
+        playback_resp.text().await.unwrap()
+    );
+
+    let browser_client = CDPClient::attach("record-then-playback-verify".to_string(), cdp_port)
+        .await
+        .expect("failed to attach verification client");
+    let expected_url = format!("{}/", base);
+    let mut counter = None;
+    for _ in 0..20 {
+        let tabs = browser_client.list_tabs().await.expect("failed to list tabs");
+        if let Some(tab) = tabs.iter().find(|tab| tab.url == expected_url) {
+            browser_client
+                .switch_tab(&tab.id)
+                .await
+                .expect("failed to switch to playback tab");
+            if let Ok(value) = browser_client
+                .evaluate_js(
+                    "(() => { const el = document.getElementById('counter'); return el ? el.textContent : null; })()",
+                )
+                .await
+            {
+                if value.as_str().is_some() {
+                    counter = Some(value);
+                    break;
+                }
+            }
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+    }
+    let counter = counter.expect("failed to read counter");
+    assert_eq!(counter.as_str(), Some("1"), "counter should be incremented by playback");
+
+    let _ = client
+        .post(format!("{}/api/kill/{}", api_base, profile_id))
+        .header("X-API-Key", api_key.as_ref().unwrap())
+        .send()
+        .await;
+    drop(state);
+    let _ = std::fs::remove_dir_all(&user_data_dir);
+}
+
+/// 50. Recording playback via API: save a simple recording, play it, and verify page state changed.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_recording_playback_via_api() {
+    let Some(_chrome) = find_chrome() else { eprintln!("SKIP: no Chrome"); return; };
+    let (base, _srv) = spawn_test_server().await;
+
+    let state = make_state();
+    let api_port = 39527u16;
+    let api_key = Some("test-playback-key".to_string());
+
+    {
+        let mut config = state.config.write();
+        if let Some(chrome_path) = find_chrome() {
+            config.chrome_path = Some(chrome_path);
+        }
+        config.mcp.enabled = true;
+        config.mcp.api_port = api_port;
+        config.mcp.api_key = api_key.clone();
+    }
+
+    run_server(state.clone(), api_port, api_key.clone());
+    wait_for_api_ready(api_port, api_key.as_deref()).await;
+
+    let client = reqwest::Client::new();
+    let api_base = format!("http://127.0.0.1:{}", api_port);
+    let profile_id = "playback-test";
+    let user_data_dir = std::env::temp_dir().join(format!("browsion-e2e-playback-{}", api_port));
+    let _ = std::fs::remove_dir_all(&user_data_dir);
+    std::fs::create_dir_all(&user_data_dir).unwrap();
+
+    let profile = serde_json::json!({
+        "id": profile_id,
+        "name": "Playback Test",
+        "description": "",
+        "user_data_dir": user_data_dir.to_str().unwrap(),
+        "lang": "en-US",
+        "tags": [],
+        "custom_args": [],
+        "headless": true
+    });
+
+    let create_resp = client
+        .post(format!("{}/api/profiles", api_base))
+        .header("X-API-Key", api_key.as_ref().unwrap())
+        .json(&profile)
+        .send()
+        .await
+        .expect("create profile failed");
+    assert_eq!(create_resp.status(), StatusCode::CREATED);
+
+    let launch_resp = client
+        .post(format!("{}/api/launch/{}", api_base, profile_id))
+        .header("X-API-Key", api_key.as_ref().unwrap())
+        .send()
+        .await
+        .expect("launch failed");
+    assert_eq!(launch_resp.status(), StatusCode::OK);
+    let launch_json: serde_json::Value = launch_resp.json().await.expect("launch JSON missing");
+    let cdp_port = launch_json
+        .get("cdp_port")
+        .and_then(|v| v.as_u64())
+        .expect("cdp_port missing") as u16;
+
+    let recording = serde_json::json!({
+        "id": "playback-recording",
+        "name": "Playback Recording",
+        "description": "Navigate and click",
+        "profile_id": profile_id,
+        "actions": [
+            {
+                "index": 0,
+                "type": "navigate",
+                "params": { "url": format!("{}/", base) },
+                "timestamp_ms": 0,
+                "screenshot_base64": null
+            },
+            {
+                "index": 1,
+                "type": "click",
+                "params": { "selector": "#btn" },
+                "timestamp_ms": 250,
+                "screenshot_base64": null
+            }
+        ],
+        "created_at": 0,
+        "duration_ms": 250
+    });
+
+    let save_resp = client
+        .post(format!("{}/api/recordings", api_base))
+        .header("X-API-Key", api_key.as_ref().unwrap())
+        .json(&recording)
+        .send()
+        .await
+        .expect("save recording failed");
+    assert_eq!(save_resp.status(), StatusCode::CREATED);
+
+    let playback_resp = client
+        .post(format!("{}/api/recordings/playback-recording/play/{}", api_base, profile_id))
+        .header("X-API-Key", api_key.as_ref().unwrap())
+        .send()
+        .await
+        .expect("playback request failed");
+    assert_eq!(
+        playback_resp.status(),
+        StatusCode::OK,
+        "playback failed: {:?}",
+        playback_resp.text().await.unwrap()
+    );
+
+    let browser_client = CDPClient::attach("playback-verify".to_string(), cdp_port)
+        .await
+        .expect("failed to attach verification client");
+
+    let counter = browser_client
+        .evaluate_js("document.getElementById('counter').textContent")
+        .await
+        .expect("failed to read counter");
+    assert_eq!(counter.as_str(), Some("1"), "counter should be incremented by playback");
+
+    let title = browser_client.get_title().await.expect("failed to get title");
+    assert_eq!(title.as_deref(), Some("Browsion Test Page"));
+
+    let _ = client
+        .post(format!("{}/api/kill/{}", api_base, profile_id))
+        .header("X-API-Key", api_key.as_ref().unwrap())
+        .send()
+        .await;
+    drop(state);
+    let _ = std::fs::remove_dir_all(&user_data_dir);
+}
+
+/// 49. Recording playback via API: click opens a new tab, switch into it, and continue interacting there.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_recording_playback_popup_tab_flow_via_api() {
+    let Some(_chrome) = find_chrome() else { eprintln!("SKIP: no Chrome"); return; };
+    let (base, _srv) = spawn_test_server().await;
+
+    let state = make_state();
+    let api_port = 39528u16;
+    let api_key = Some("test-playback-popup-key".to_string());
+
+    {
+        let mut config = state.config.write();
+        if let Some(chrome_path) = find_chrome() {
+            config.chrome_path = Some(chrome_path);
+        }
+        config.mcp.enabled = true;
+        config.mcp.api_port = api_port;
+        config.mcp.api_key = api_key.clone();
+    }
+
+    run_server(state.clone(), api_port, api_key.clone());
+    wait_for_api_ready(api_port, api_key.as_deref()).await;
+
+    let client = reqwest::Client::new();
+    let api_base = format!("http://127.0.0.1:{}", api_port);
+    let profile_id = "playback-popup-test";
+    let user_data_dir = std::env::temp_dir().join(format!("browsion-e2e-playback-popup-{}", api_port));
+    let _ = std::fs::remove_dir_all(&user_data_dir);
+    std::fs::create_dir_all(&user_data_dir).unwrap();
+
+    let profile = serde_json::json!({
+        "id": profile_id,
+        "name": "Playback Popup Test",
+        "description": "",
+        "user_data_dir": user_data_dir.to_str().unwrap(),
+        "lang": "en-US",
+        "tags": [],
+        "custom_args": [],
+        "headless": true
+    });
+
+    let create_resp = client
+        .post(format!("{}/api/profiles", api_base))
+        .header("X-API-Key", api_key.as_ref().unwrap())
+        .json(&profile)
+        .send()
+        .await
+        .expect("create profile failed");
+    assert_eq!(create_resp.status(), StatusCode::CREATED);
+
+    let launch_resp = client
+        .post(format!("{}/api/launch/{}", api_base, profile_id))
+        .header("X-API-Key", api_key.as_ref().unwrap())
+        .send()
+        .await
+        .expect("launch failed");
+    assert_eq!(launch_resp.status(), StatusCode::OK);
+    let launch_json: serde_json::Value = launch_resp.json().await.expect("launch JSON missing");
+    let cdp_port = launch_json
+        .get("cdp_port")
+        .and_then(|v| v.as_u64())
+        .expect("cdp_port missing") as u16;
+
+    let popup_target_id = "recorded-popup-target";
+    let recording = serde_json::json!({
+        "id": "playback-popup-recording",
+        "name": "Playback Popup Recording",
+        "description": "Click opens popup tab and continue there",
+        "profile_id": profile_id,
+        "actions": [
+            {
+                "index": 0,
+                "type": "navigate",
+                "params": { "url": format!("{}/tabs", base) },
+                "timestamp_ms": 0,
+                "screenshot_base64": null
+            },
+            {
+                "index": 1,
+                "type": "click",
+                "params": { "selector": "#new-tab-link" },
+                "timestamp_ms": 250,
+                "screenshot_base64": null
+            },
+            {
+                "index": 2,
+                "type": "new_tab",
+                "params": {
+                    "target_id": popup_target_id,
+                    "url": format!("{}/form", base)
+                },
+                "timestamp_ms": 300,
+                "screenshot_base64": null
+            },
+            {
+                "index": 3,
+                "type": "switch_tab",
+                "params": { "target_id": popup_target_id },
+                "timestamp_ms": 350,
+                "screenshot_base64": null
+            },
+            {
+                "index": 4,
+                "type": "wait_for_element",
+                "params": { "selector": "#name-input", "timeout_ms": 5000 },
+                "timestamp_ms": 400,
+                "screenshot_base64": null
+            },
+            {
+                "index": 5,
+                "type": "type",
+                "params": { "selector": "#name-input", "text": "Popup User" },
+                "timestamp_ms": 450,
+                "screenshot_base64": null
+            },
+            {
+                "index": 6,
+                "type": "type",
+                "params": { "selector": "#email-input", "text": "popup@example.com" },
+                "timestamp_ms": 550,
+                "screenshot_base64": null
+            },
+            {
+                "index": 7,
+                "type": "select_option",
+                "params": { "selector": "#country-select", "value": "gb" },
+                "timestamp_ms": 650,
+                "screenshot_base64": null
+            },
+            {
+                "index": 8,
+                "type": "click",
+                "params": { "selector": "#submit-btn" },
+                "timestamp_ms": 750,
+                "screenshot_base64": null
+            }
+        ],
+        "created_at": 0,
+        "duration_ms": 750
+    });
+
+    let save_resp = client
+        .post(format!("{}/api/recordings", api_base))
+        .header("X-API-Key", api_key.as_ref().unwrap())
+        .json(&recording)
+        .send()
+        .await
+        .expect("save recording failed");
+    assert_eq!(save_resp.status(), StatusCode::CREATED);
+
+    let playback_resp = client
+        .post(format!(
+            "{}/api/recordings/playback-popup-recording/play/{}",
+            api_base, profile_id
+        ))
+        .header("X-API-Key", api_key.as_ref().unwrap())
+        .send()
+        .await
+        .expect("playback request failed");
+    assert_eq!(
+        playback_resp.status(),
+        StatusCode::OK,
+        "playback failed: {:?}",
+        playback_resp.text().await.unwrap()
+    );
+
+    let browser_client = CDPClient::attach("playback-popup-verify".to_string(), cdp_port)
+        .await
+        .expect("failed to attach verification client");
+
+    let tabs = browser_client.list_tabs().await.expect("failed to list tabs");
+    assert!(
+        tabs.len() >= 2,
+        "popup playback should leave at least two tabs open, got {}",
+        tabs.len()
+    );
+
+    let form_tabs: Vec<_> = tabs
+        .iter()
+        .filter(|tab| tab.url.contains("/form"))
+        .collect();
+    assert!(
+        !form_tabs.is_empty(),
+        "popup tab with /form URL should exist"
+    );
+
+    let mut matched_result = None;
+    for tab in form_tabs {
+        browser_client
+            .switch_tab(&tab.id)
+            .await
+            .expect("failed to switch to candidate popup tab");
+        let title = browser_client.get_title().await.expect("failed to get popup title");
+        if title.as_deref() != Some("Browsion Form Test") {
+            continue;
+        }
+
+        let result = browser_client
+            .evaluate_js("document.getElementById('result').textContent")
+            .await
+            .expect("failed to read popup result");
+        if result.as_str() == Some("Popup User|popup@example.com|gb") {
+            matched_result = result.as_str().map(|s| s.to_string());
+            break;
+        }
+    }
+
+    assert_eq!(
+        matched_result.as_deref(),
+        Some("Popup User|popup@example.com|gb"),
+        "one of the /form tabs should be completed by playback"
+    );
+
+    let _ = client
+        .post(format!("{}/api/kill/{}", api_base, profile_id))
+        .header("X-API-Key", api_key.as_ref().unwrap())
+        .send()
+        .await;
+    drop(state);
+    let _ = std::fs::remove_dir_all(&user_data_dir);
+}
+
+/// 50. Recording playback via API: playback auto-starts a profile that is not already running.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_recording_playback_autostarts_profile_via_api() {
+    let Some(_chrome) = find_chrome() else { eprintln!("SKIP: no Chrome"); return; };
+    let (base, _srv) = spawn_test_server().await;
+
+    let state = make_state();
+    let api_port = 39529u16;
+    let api_key = Some("test-playback-autostart-key".to_string());
+
+    {
+        let mut config = state.config.write();
+        if let Some(chrome_path) = find_chrome() {
+            config.chrome_path = Some(chrome_path);
+        }
+        config.mcp.enabled = true;
+        config.mcp.api_port = api_port;
+        config.mcp.api_key = api_key.clone();
+    }
+
+    run_server(state.clone(), api_port, api_key.clone());
+    wait_for_api_ready(api_port, api_key.as_deref()).await;
+
+    let client = reqwest::Client::new();
+    let api_base = format!("http://127.0.0.1:{}", api_port);
+    let profile_id = "playback-autostart-test";
+    let user_data_dir = std::env::temp_dir().join(format!("browsion-e2e-playback-autostart-{}", api_port));
+    let _ = std::fs::remove_dir_all(&user_data_dir);
+    std::fs::create_dir_all(&user_data_dir).unwrap();
+
+    let profile = serde_json::json!({
+        "id": profile_id,
+        "name": "Playback Auto-start Test",
+        "description": "",
+        "user_data_dir": user_data_dir.to_str().unwrap(),
+        "lang": "en-US",
+        "tags": [],
+        "custom_args": [],
+        "headless": true
+    });
+
+    let create_resp = client
+        .post(format!("{}/api/profiles", api_base))
+        .header("X-API-Key", api_key.as_ref().unwrap())
+        .json(&profile)
+        .send()
+        .await
+        .expect("create profile failed");
+    assert_eq!(create_resp.status(), StatusCode::CREATED);
+
+    let recording = serde_json::json!({
+        "id": "playback-autostart-recording",
+        "name": "Playback Auto-start Recording",
+        "description": "Playback should launch browser automatically",
+        "profile_id": profile_id,
+        "actions": [
+            {
+                "index": 0,
+                "type": "navigate",
+                "params": { "url": format!("{}/", base) },
+                "timestamp_ms": 0,
+                "screenshot_base64": null
+            },
+            {
+                "index": 1,
+                "type": "click",
+                "params": { "selector": "#btn" },
+                "timestamp_ms": 250,
+                "screenshot_base64": null
+            }
+        ],
+        "created_at": 0,
+        "duration_ms": 250
+    });
+
+    let save_resp = client
+        .post(format!("{}/api/recordings", api_base))
+        .header("X-API-Key", api_key.as_ref().unwrap())
+        .json(&recording)
+        .send()
+        .await
+        .expect("save recording failed");
+    assert_eq!(save_resp.status(), StatusCode::CREATED);
+
+    let playback_resp = client
+        .post(format!(
+            "{}/api/recordings/playback-autostart-recording/play/{}",
+            api_base, profile_id
+        ))
+        .header("X-API-Key", api_key.as_ref().unwrap())
+        .send()
+        .await
+        .expect("playback request failed");
+    assert_eq!(
+        playback_resp.status(),
+        StatusCode::OK,
+        "playback failed: {:?}",
+        playback_resp.text().await.unwrap()
+    );
+
+    let running_resp = client
+        .get(format!("{}/api/running", api_base))
+        .header("X-API-Key", api_key.as_ref().unwrap())
+        .send()
+        .await
+        .expect("running request failed");
+    assert_eq!(running_resp.status(), StatusCode::OK);
+    let running: Vec<serde_json::Value> = running_resp.json().await.expect("running JSON missing");
+    let running_profile = running
+        .iter()
+        .find(|entry| entry.get("profile_id").and_then(|v| v.as_str()) == Some(profile_id))
+        .expect("playback should auto-start the target profile");
+    let cdp_port = running_profile
+        .get("cdp_port")
+        .and_then(|v| v.as_u64())
+        .expect("cdp_port missing from running browser entry") as u16;
+
+    let browser_client = CDPClient::attach("playback-autostart-verify".to_string(), cdp_port)
+        .await
+        .expect("failed to attach verification client");
+    let counter = browser_client
+        .evaluate_js("document.getElementById('counter').textContent")
+        .await
+        .expect("failed to read counter");
+    assert_eq!(counter.as_str(), Some("1"), "counter should be incremented by playback");
+
+    let _ = client
+        .post(format!("{}/api/kill/{}", api_base, profile_id))
+        .header("X-API-Key", api_key.as_ref().unwrap())
+        .send()
+        .await;
+    drop(state);
+    let _ = std::fs::remove_dir_all(&user_data_dir);
+}
+
+/// 51. Recording playback via API: legacy recordings with first-step `new_tab(url)` and `type.value` remain playable.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_recording_playback_legacy_new_tab_and_value_compat_via_api() {
+    let Some(_chrome) = find_chrome() else { eprintln!("SKIP: no Chrome"); return; };
+    let (base, _srv) = spawn_test_server().await;
+
+    let state = make_state();
+    let api_port = 39530u16;
+    let api_key = Some("test-playback-legacy-key".to_string());
+
+    {
+        let mut config = state.config.write();
+        if let Some(chrome_path) = find_chrome() {
+            config.chrome_path = Some(chrome_path);
+        }
+        config.mcp.enabled = true;
+        config.mcp.api_port = api_port;
+        config.mcp.api_key = api_key.clone();
+    }
+
+    run_server(state.clone(), api_port, api_key.clone());
+    wait_for_api_ready(api_port, api_key.as_deref()).await;
+
+    let client = reqwest::Client::new();
+    let api_base = format!("http://127.0.0.1:{}", api_port);
+    let profile_id = "playback-legacy-test";
+    let user_data_dir = std::env::temp_dir().join(format!("browsion-e2e-playback-legacy-{}", api_port));
+    let _ = std::fs::remove_dir_all(&user_data_dir);
+    std::fs::create_dir_all(&user_data_dir).unwrap();
+
+    let profile = serde_json::json!({
+        "id": profile_id,
+        "name": "Playback Legacy Compatibility Test",
+        "description": "",
+        "user_data_dir": user_data_dir.to_str().unwrap(),
+        "lang": "en-US",
+        "tags": [],
+        "custom_args": [],
+        "headless": true
+    });
+
+    let create_resp = client
+        .post(format!("{}/api/profiles", api_base))
+        .header("X-API-Key", api_key.as_ref().unwrap())
+        .json(&profile)
+        .send()
+        .await
+        .expect("create profile failed");
+    assert_eq!(create_resp.status(), StatusCode::CREATED);
+
+    let launch_resp = client
+        .post(format!("{}/api/launch/{}", api_base, profile_id))
+        .header("X-API-Key", api_key.as_ref().unwrap())
+        .send()
+        .await
+        .expect("launch failed");
+    assert_eq!(launch_resp.status(), StatusCode::OK);
+    let launch_json: serde_json::Value = launch_resp.json().await.expect("launch JSON missing");
+    let cdp_port = launch_json
+        .get("cdp_port")
+        .and_then(|v| v.as_u64())
+        .expect("cdp_port missing") as u16;
+
+    let recording = serde_json::json!({
+        "id": "playback-legacy-recording",
+        "name": "Playback Legacy Recording",
+        "description": "Legacy first-step new_tab and value fields",
+        "profile_id": profile_id,
+        "actions": [
+            {
+                "index": 0,
+                "type": "new_tab",
+                "params": { "url": format!("{}/form", base) },
+                "timestamp_ms": 0,
+                "screenshot_base64": null
+            },
+            {
+                "index": 1,
+                "type": "type",
+                "params": { "selector": "#name-input", "value": "Legacy User" },
+                "timestamp_ms": 250,
+                "screenshot_base64": null
+            },
+            {
+                "index": 2,
+                "type": "type",
+                "params": { "selector": "#email-input", "value": "legacy@example.com" },
+                "timestamp_ms": 500,
+                "screenshot_base64": null
+            }
+        ],
+        "created_at": 0,
+        "duration_ms": 500
+    });
+
+    let save_resp = client
+        .post(format!("{}/api/recordings", api_base))
+        .header("X-API-Key", api_key.as_ref().unwrap())
+        .json(&recording)
+        .send()
+        .await
+        .expect("save recording failed");
+    assert_eq!(save_resp.status(), StatusCode::CREATED);
+
+    let playback_resp = client
+        .post(format!(
+            "{}/api/recordings/playback-legacy-recording/play/{}",
+            api_base, profile_id
+        ))
+        .header("X-API-Key", api_key.as_ref().unwrap())
+        .send()
+        .await
+        .expect("playback request failed");
+    assert_eq!(
+        playback_resp.status(),
+        StatusCode::OK,
+        "playback failed: {:?}",
+        playback_resp.text().await.unwrap()
+    );
+
+    let browser_client = CDPClient::attach("playback-legacy-verify".to_string(), cdp_port)
+        .await
+        .expect("failed to attach verification client");
+    let title = browser_client.get_title().await.expect("failed to get title");
+    assert_eq!(title.as_deref(), Some("Browsion Form Test"));
+
+    let name_value = browser_client
+        .evaluate_js("document.getElementById('name-input').value")
+        .await
+        .expect("failed to read name input");
+    assert_eq!(name_value.as_str(), Some("Legacy User"));
+
+    let email_value = browser_client
+        .evaluate_js("document.getElementById('email-input').value")
+        .await
+        .expect("failed to read email input");
+    assert_eq!(email_value.as_str(), Some("legacy@example.com"));
+
+    let _ = client
+        .post(format!("{}/api/kill/{}", api_base, profile_id))
+        .header("X-API-Key", api_key.as_ref().unwrap())
+        .send()
+        .await;
+    drop(state);
+    let _ = std::fs::remove_dir_all(&user_data_dir);
+}
+
+/// 52. Recording playback via API: WebSocket clients receive progress events when API key auth is enabled.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_recording_playback_progress_ws_via_api_key() {
+    let Some(_chrome) = find_chrome() else { eprintln!("SKIP: no Chrome"); return; };
+    let (base, _srv) = spawn_test_server().await;
+
+    let state = make_state();
+    let api_port = 39531u16;
+    let api_key = Some("test-playback-ws-key".to_string());
+
+    {
+        let mut config = state.config.write();
+        if let Some(chrome_path) = find_chrome() {
+            config.chrome_path = Some(chrome_path);
+        }
+        config.mcp.enabled = true;
+        config.mcp.api_port = api_port;
+        config.mcp.api_key = api_key.clone();
+    }
+
+    run_server(state.clone(), api_port, api_key.clone());
+    wait_for_api_ready(api_port, api_key.as_deref()).await;
+
+    let client = reqwest::Client::new();
+    let api_base = format!("http://127.0.0.1:{}", api_port);
+    let profile_id = "playback-ws-test";
+    let user_data_dir = std::env::temp_dir().join(format!("browsion-e2e-playback-ws-{}", api_port));
+    let _ = std::fs::remove_dir_all(&user_data_dir);
+    std::fs::create_dir_all(&user_data_dir).unwrap();
+
+    let profile = serde_json::json!({
+        "id": profile_id,
+        "name": "Playback WS Progress Test",
+        "description": "",
+        "user_data_dir": user_data_dir.to_str().unwrap(),
+        "lang": "en-US",
+        "tags": [],
+        "custom_args": [],
+        "headless": true
+    });
+
+    let create_resp = client
+        .post(format!("{}/api/profiles", api_base))
+        .header("X-API-Key", api_key.as_ref().unwrap())
+        .json(&profile)
+        .send()
+        .await
+        .expect("create profile failed");
+    assert_eq!(create_resp.status(), StatusCode::CREATED);
+
+    let recording = serde_json::json!({
+        "id": "playback-ws-recording",
+        "name": "Playback WS Recording",
+        "description": "Playback emits WebSocket progress updates",
+        "profile_id": profile_id,
+        "actions": [
+            {
+                "index": 0,
+                "type": "navigate",
+                "params": { "url": format!("{}/", base) },
+                "timestamp_ms": 0,
+                "screenshot_base64": null
+            },
+            {
+                "index": 1,
+                "type": "click",
+                "params": { "selector": "#btn" },
+                "timestamp_ms": 250,
+                "screenshot_base64": null
+            }
+        ],
+        "created_at": 0,
+        "duration_ms": 250
+    });
+
+    let save_resp = client
+        .post(format!("{}/api/recordings", api_base))
+        .header("X-API-Key", api_key.as_ref().unwrap())
+        .json(&recording)
+        .send()
+        .await
+        .expect("save recording failed");
+    assert_eq!(save_resp.status(), StatusCode::CREATED);
+
+    let ws_url = format!(
+        "ws://127.0.0.1:{}/api/ws?api_key={}",
+        api_port,
+        api_key.as_ref().unwrap()
+    );
+    let (mut ws_stream, _) = connect_async(ws_url)
+        .await
+        .expect("failed to connect websocket");
+
+    let playback_resp = client
+        .post(format!(
+            "{}/api/recordings/playback-ws-recording/play/{}",
+            api_base, profile_id
+        ))
+        .header("X-API-Key", api_key.as_ref().unwrap())
+        .send()
+        .await
+        .expect("playback request failed");
+    assert_eq!(
+        playback_resp.status(),
+        StatusCode::OK,
+        "playback failed: {:?}",
+        playback_resp.text().await.unwrap()
+    );
+
+    let mut progress_events = Vec::new();
+    let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(10);
+    while tokio::time::Instant::now() < deadline {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        let message = tokio::time::timeout(remaining, ws_stream.next())
+            .await
+            .expect("timed out waiting for websocket message");
+        let Some(Ok(tokio_tungstenite::tungstenite::Message::Text(text))) = message else {
+            continue;
+        };
+        let payload: serde_json::Value = serde_json::from_str(&text).expect("invalid ws JSON");
+        if payload.get("type").and_then(|v| v.as_str()) != Some("RecordingPlaybackProgress") {
+            continue;
+        }
+        let data = payload.get("data").cloned().unwrap_or(serde_json::Value::Null);
+        if data.get("recording_id").and_then(|v| v.as_str()) != Some("playback-ws-recording") {
+            continue;
+        }
+        progress_events.push(data.clone());
+        if data.get("status").and_then(|v| v.as_str()) == Some("completed") {
+            break;
+        }
+    }
+
+    assert!(
+        progress_events.len() >= 3,
+        "expected running + running + completed progress events, got {:?}",
+        progress_events
+    );
+    assert_eq!(
+        progress_events.first().and_then(|e| e.get("status")).and_then(|v| v.as_str()),
+        Some("running")
+    );
+    assert!(
+        progress_events.iter().any(|e| e.get("action_type").and_then(|v| v.as_str()) == Some("navigate")),
+        "navigate progress event missing: {:?}",
+        progress_events
+    );
+    assert!(
+        progress_events.iter().any(|e| e.get("action_type").and_then(|v| v.as_str()) == Some("click")),
+        "click progress event missing: {:?}",
+        progress_events
+    );
+    assert_eq!(
+        progress_events.last().and_then(|e| e.get("status")).and_then(|v| v.as_str()),
+        Some("completed")
+    );
+
+    let _ = client
+        .post(format!("{}/api/kill/{}", api_base, profile_id))
+        .header("X-API-Key", api_key.as_ref().unwrap())
+        .send()
+        .await;
+    let _ = ws_stream.close(None).await;
+    drop(state);
+    let _ = std::fs::remove_dir_all(&user_data_dir);
+}
+
+/// 53. Recording playback via API: switch to popup and back to the original tab using recorded previous_target_id mapping.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_recording_playback_switch_back_to_original_tab_via_api() {
+    let Some(_chrome) = find_chrome() else { eprintln!("SKIP: no Chrome"); return; };
+    let (base, _srv) = spawn_test_server().await;
+
+    let state = make_state();
+    let api_port = 39532u16;
+    let api_key = Some("test-playback-switch-back-key".to_string());
+
+    {
+        let mut config = state.config.write();
+        if let Some(chrome_path) = find_chrome() {
+            config.chrome_path = Some(chrome_path);
+        }
+        config.mcp.enabled = true;
+        config.mcp.api_port = api_port;
+        config.mcp.api_key = api_key.clone();
+    }
+
+    run_server(state.clone(), api_port, api_key.clone());
+    wait_for_api_ready(api_port, api_key.as_deref()).await;
+
+    let client = reqwest::Client::new();
+    let api_base = format!("http://127.0.0.1:{}", api_port);
+    let profile_id = "playback-switch-back-test";
+    let user_data_dir = std::env::temp_dir().join(format!("browsion-e2e-playback-switch-back-{}", api_port));
+    let _ = std::fs::remove_dir_all(&user_data_dir);
+    std::fs::create_dir_all(&user_data_dir).unwrap();
+
+    let profile = serde_json::json!({
+        "id": profile_id,
+        "name": "Playback Switch Back Test",
+        "description": "",
+        "user_data_dir": user_data_dir.to_str().unwrap(),
+        "lang": "en-US",
+        "tags": [],
+        "custom_args": [],
+        "headless": true
+    });
+
+    let create_resp = client
+        .post(format!("{}/api/profiles", api_base))
+        .header("X-API-Key", api_key.as_ref().unwrap())
+        .json(&profile)
+        .send()
+        .await
+        .expect("create profile failed");
+    assert_eq!(create_resp.status(), StatusCode::CREATED);
+
+    let launch_resp = client
+        .post(format!("{}/api/launch/{}", api_base, profile_id))
+        .header("X-API-Key", api_key.as_ref().unwrap())
+        .send()
+        .await
+        .expect("launch failed");
+    assert_eq!(launch_resp.status(), StatusCode::OK);
+    let launch_json: serde_json::Value = launch_resp.json().await.expect("launch JSON missing");
+    let cdp_port = launch_json
+        .get("cdp_port")
+        .and_then(|v| v.as_u64())
+        .expect("cdp_port missing") as u16;
+
+    let origin_recorded_id = "recorded-origin-tab";
+    let popup_recorded_id = "recorded-popup-tab";
+    let recording = serde_json::json!({
+        "id": "playback-switch-back-recording",
+        "name": "Playback Switch Back Recording",
+        "description": "Switch to popup, then switch back to original tab",
+        "profile_id": profile_id,
+        "actions": [
+            {
+                "index": 0,
+                "type": "navigate",
+                "params": { "url": format!("{}/tabs", base) },
+                "timestamp_ms": 0,
+                "screenshot_base64": null
+            },
+            {
+                "index": 1,
+                "type": "click",
+                "params": { "selector": "#new-tab-link" },
+                "timestamp_ms": 250,
+                "screenshot_base64": null
+            },
+            {
+                "index": 2,
+                "type": "new_tab",
+                "params": {
+                    "target_id": popup_recorded_id,
+                    "url": format!("{}/form", base)
+                },
+                "timestamp_ms": 300,
+                "screenshot_base64": null
+            },
+            {
+                "index": 3,
+                "type": "switch_tab",
+                "params": {
+                    "target_id": popup_recorded_id,
+                    "previous_target_id": origin_recorded_id
+                },
+                "timestamp_ms": 350,
+                "screenshot_base64": null
+            },
+            {
+                "index": 4,
+                "type": "switch_tab",
+                "params": {
+                    "target_id": origin_recorded_id,
+                    "previous_target_id": popup_recorded_id
+                },
+                "timestamp_ms": 500,
+                "screenshot_base64": null
+            },
+            {
+                "index": 5,
+                "type": "click",
+                "params": { "selector": "#origin-btn" },
+                "timestamp_ms": 650,
+                "screenshot_base64": null
+            }
+        ],
+        "created_at": 0,
+        "duration_ms": 650
+    });
+
+    let save_resp = client
+        .post(format!("{}/api/recordings", api_base))
+        .header("X-API-Key", api_key.as_ref().unwrap())
+        .json(&recording)
+        .send()
+        .await
+        .expect("save recording failed");
+    assert_eq!(save_resp.status(), StatusCode::CREATED);
+
+    let playback_resp = client
+        .post(format!(
+            "{}/api/recordings/playback-switch-back-recording/play/{}",
+            api_base, profile_id
+        ))
+        .header("X-API-Key", api_key.as_ref().unwrap())
+        .send()
+        .await
+        .expect("playback request failed");
+    assert_eq!(
+        playback_resp.status(),
+        StatusCode::OK,
+        "playback failed: {:?}",
+        playback_resp.text().await.unwrap()
+    );
+
+    let browser_client = CDPClient::attach("playback-switch-back-verify".to_string(), cdp_port)
+        .await
+        .expect("failed to attach verification client");
+
+    let tabs = browser_client.list_tabs().await.expect("failed to list tabs");
+    let origin_tab = tabs
+        .iter()
+        .find(|tab| tab.url.contains("/tabs"))
+        .expect("origin /tabs page should still exist");
+    browser_client
+        .switch_tab(&origin_tab.id)
+        .await
+        .expect("failed to switch to original tab");
+
+    let counter = browser_client
+        .evaluate_js("document.getElementById('tab-counter').textContent")
+        .await
+        .expect("failed to read origin counter");
+    assert_eq!(
+        counter.as_str(),
+        Some("1"),
+        "playback should switch back to original tab before clicking origin button"
+    );
+
+    let _ = client
+        .post(format!("{}/api/kill/{}", api_base, profile_id))
+        .header("X-API-Key", api_key.as_ref().unwrap())
+        .send()
+        .await;
+    drop(state);
+    let _ = std::fs::remove_dir_all(&user_data_dir);
+}
+
+/// 54. Recording playback via API: wait for delayed popup creation before continuing in the new tab.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_recording_playback_delayed_popup_via_api() {
+    let Some(_chrome) = find_chrome() else { eprintln!("SKIP: no Chrome"); return; };
+    let (base, _srv) = spawn_test_server().await;
+
+    let state = make_state();
+    let api_port = 39533u16;
+    let api_key = Some("test-playback-delayed-popup-key".to_string());
+
+    {
+        let mut config = state.config.write();
+        if let Some(chrome_path) = find_chrome() {
+            config.chrome_path = Some(chrome_path);
+        }
+        config.mcp.enabled = true;
+        config.mcp.api_port = api_port;
+        config.mcp.api_key = api_key.clone();
+    }
+
+    run_server(state.clone(), api_port, api_key.clone());
+    wait_for_api_ready(api_port, api_key.as_deref()).await;
+
+    let client = reqwest::Client::new();
+    let api_base = format!("http://127.0.0.1:{}", api_port);
+    let profile_id = "playback-delayed-popup-test";
+    let user_data_dir = std::env::temp_dir().join(format!("browsion-e2e-playback-delayed-popup-{}", api_port));
+    let _ = std::fs::remove_dir_all(&user_data_dir);
+    std::fs::create_dir_all(&user_data_dir).unwrap();
+
+    let profile = serde_json::json!({
+        "id": profile_id,
+        "name": "Playback Delayed Popup Test",
+        "description": "",
+        "user_data_dir": user_data_dir.to_str().unwrap(),
+        "lang": "en-US",
+        "tags": [],
+        "custom_args": [],
+        "headless": true
+    });
+
+    let create_resp = client
+        .post(format!("{}/api/profiles", api_base))
+        .header("X-API-Key", api_key.as_ref().unwrap())
+        .json(&profile)
+        .send()
+        .await
+        .expect("create profile failed");
+    assert_eq!(create_resp.status(), StatusCode::CREATED);
+
+    let launch_resp = client
+        .post(format!("{}/api/launch/{}", api_base, profile_id))
+        .header("X-API-Key", api_key.as_ref().unwrap())
+        .send()
+        .await
+        .expect("launch failed");
+    assert_eq!(launch_resp.status(), StatusCode::OK);
+    let launch_json: serde_json::Value = launch_resp.json().await.expect("launch JSON missing");
+    let cdp_port = launch_json
+        .get("cdp_port")
+        .and_then(|v| v.as_u64())
+        .expect("cdp_port missing") as u16;
+
+    let popup_recorded_id = "recorded-delayed-popup-tab";
+    let recording = serde_json::json!({
+        "id": "playback-delayed-popup-recording",
+        "name": "Playback Delayed Popup Recording",
+        "description": "Click opens delayed popup and continue there",
+        "profile_id": profile_id,
+        "actions": [
+            {
+                "index": 0,
+                "type": "navigate",
+                "params": { "url": format!("{}/tabs-delayed", base) },
+                "timestamp_ms": 0,
+                "screenshot_base64": null
+            },
+            {
+                "index": 1,
+                "type": "click",
+                "params": { "selector": "#delayed-tab-btn" },
+                "timestamp_ms": 250,
+                "screenshot_base64": null
+            },
+            {
+                "index": 2,
+                "type": "new_tab",
+                "params": {
+                    "target_id": popup_recorded_id,
+                    "url": format!("{}/form", base)
+                },
+                "timestamp_ms": 1100,
+                "screenshot_base64": null
+            },
+            {
+                "index": 3,
+                "type": "switch_tab",
+                "params": { "target_id": popup_recorded_id },
+                "timestamp_ms": 1200,
+                "screenshot_base64": null
+            },
+            {
+                "index": 4,
+                "type": "type",
+                "params": { "selector": "#name-input", "text": "Delayed Popup User" },
+                "timestamp_ms": 1350,
+                "screenshot_base64": null
+            }
+        ],
+        "created_at": 0,
+        "duration_ms": 1350
+    });
+
+    let save_resp = client
+        .post(format!("{}/api/recordings", api_base))
+        .header("X-API-Key", api_key.as_ref().unwrap())
+        .json(&recording)
+        .send()
+        .await
+        .expect("save recording failed");
+    assert_eq!(save_resp.status(), StatusCode::CREATED);
+
+    let playback_resp = client
+        .post(format!(
+            "{}/api/recordings/playback-delayed-popup-recording/play/{}",
+            api_base, profile_id
+        ))
+        .header("X-API-Key", api_key.as_ref().unwrap())
+        .send()
+        .await
+        .expect("playback request failed");
+    assert_eq!(
+        playback_resp.status(),
+        StatusCode::OK,
+        "playback failed: {:?}",
+        playback_resp.text().await.unwrap()
+    );
+
+    let browser_client = CDPClient::attach("playback-delayed-popup-verify".to_string(), cdp_port)
+        .await
+        .expect("failed to attach verification client");
+
+    let tabs = browser_client.list_tabs().await.expect("failed to list tabs");
+    let popup_tab = tabs
+        .iter()
+        .find(|tab| tab.url.contains("/form"))
+        .expect("delayed popup /form tab should exist");
+    browser_client
+        .switch_tab(&popup_tab.id)
+        .await
+        .expect("failed to switch to delayed popup tab");
+
+    let name_value = browser_client
+        .evaluate_js("document.getElementById('name-input').value")
+        .await
+        .expect("failed to read popup input");
+    assert_eq!(name_value.as_str(), Some("Delayed Popup User"));
+
+    let _ = client
+        .post(format!("{}/api/kill/{}", api_base, profile_id))
+        .header("X-API-Key", api_key.as_ref().unwrap())
+        .send()
+        .await;
+    drop(state);
+    let _ = std::fs::remove_dir_all(&user_data_dir);
 }

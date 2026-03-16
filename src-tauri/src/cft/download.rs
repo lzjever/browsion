@@ -110,11 +110,7 @@ fn extract_zip(zip_path: &Path, dest_dir: &Path) -> Result<PathBuf, String> {
             std::io::copy(&mut entry, &mut out).map_err(|e| format!("Write file: {}", e))?;
             #[cfg(unix)]
             {
-                if name.ends_with("chrome") || name.ends_with("Google Chrome for Testing") {
-                    use std::os::unix::fs::PermissionsExt;
-                    let perms = std::fs::Permissions::from_mode(0o755);
-                    std::fs::set_permissions(&out_path, perms).ok();
-                }
+                apply_unix_permissions(&entry, &out_path);
             }
         }
     }
@@ -182,6 +178,8 @@ pub async fn ensure_chrome_binary(
     let version_dir = download_dir.join(&version_info.version);
     let existing = find_chrome_in_dir(&version_dir);
     if let Some(p) = existing {
+        #[cfg(unix)]
+        repair_extracted_permissions(&version_dir);
         return Ok(p);
     }
     download_and_extract(&version_info.url, &version_dir, on_progress).await
@@ -238,4 +236,78 @@ fn find_chrome_in_dir(dir: &Path) -> Option<PathBuf> {
         }
     }
     None
+}
+
+#[cfg(unix)]
+fn apply_unix_permissions(entry: &zip::read::ZipFile<'_>, out_path: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+
+    if let Some(mode) = entry.unix_mode() {
+        let _ = std::fs::set_permissions(out_path, std::fs::Permissions::from_mode(mode));
+        return;
+    }
+
+    if should_be_executable(out_path) {
+        let _ = std::fs::set_permissions(out_path, std::fs::Permissions::from_mode(0o755));
+    }
+}
+
+#[cfg(unix)]
+fn repair_extracted_permissions(version_dir: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+
+    let Ok(entries) = std::fs::read_dir(version_dir) else {
+        return;
+    };
+
+    for entry in entries.flatten() {
+        let root = entry.path();
+        if !root.is_dir() {
+            continue;
+        }
+
+        let Ok(files) = std::fs::read_dir(&root) else {
+            continue;
+        };
+
+        for file in files.flatten() {
+            let path = file.path();
+            if path.is_file() && should_be_executable(&path) {
+                let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755));
+            }
+        }
+    }
+}
+
+#[cfg(unix)]
+fn should_be_executable(path: &Path) -> bool {
+    let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+        return false;
+    };
+
+    matches!(
+        name,
+        "chrome"
+            | "Google Chrome for Testing"
+            | "chrome-wrapper"
+            | "chrome_crashpad_handler"
+            | "chrome_sandbox"
+            | "xdg-mime"
+            | "xdg-settings"
+    )
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::should_be_executable;
+    use std::path::Path;
+
+    #[test]
+    fn test_should_be_executable_for_linux_cft_binaries() {
+        assert!(should_be_executable(Path::new("chrome")));
+        assert!(should_be_executable(Path::new("chrome_crashpad_handler")));
+        assert!(should_be_executable(Path::new("chrome_sandbox")));
+        assert!(should_be_executable(Path::new("xdg-settings")));
+        assert!(!should_be_executable(Path::new("icudtl.dat")));
+    }
 }

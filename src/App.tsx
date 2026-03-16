@@ -2,14 +2,11 @@ import { useState, useEffect } from 'react';
 import { ProfileList } from './components/ProfileList';
 import { ProfileForm } from './components/ProfileForm';
 import { Settings } from './components/Settings';
-import { McpPage } from './components/McpPage';
-import { MonitorPage } from './components/MonitorPage';
-import { WorkflowList } from './components/WorkflowList';
 import { RecordingList } from './components/RecordingList';
 import type { BrowserProfile } from './types/profile';
 import './styles/index.css';
 
-type View = 'profiles' | 'settings' | 'mcp' | 'monitor' | 'workflows' | 'recordings';
+type View = 'profiles' | 'settings' | 'recordings';
 
 function App() {
   const [currentView, setCurrentView] = useState<View>('profiles');
@@ -82,24 +79,6 @@ function App() {
             Settings
           </button>
           <button
-            className={`nav-btn ${currentView === 'mcp' ? 'active' : ''}`}
-            onClick={() => setCurrentView('mcp')}
-          >
-            MCP
-          </button>
-          <button
-            className={`nav-btn ${currentView === 'monitor' ? 'active' : ''}`}
-            onClick={() => setCurrentView('monitor')}
-          >
-            Monitor
-          </button>
-          <button
-            className={`nav-btn ${currentView === 'workflows' ? 'active' : ''}`}
-            onClick={() => setCurrentView('workflows')}
-          >
-            Workflows
-          </button>
-          <button
             className={`nav-btn ${currentView === 'recordings' ? 'active' : ''}`}
             onClick={() => setCurrentView('recordings')}
           >
@@ -126,12 +105,6 @@ function App() {
         )}
 
         {currentView === 'settings' && <Settings />}
-
-        {currentView === 'mcp' && <McpPage />}
-
-        {currentView === 'monitor' && <MonitorPage />}
-
-        {currentView === 'workflows' && <WorkflowList profiles={profiles} />}
 
         {currentView === 'recordings' && <RecordingList profiles={profiles} />}
       </main>

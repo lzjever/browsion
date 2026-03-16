@@ -14,10 +14,6 @@ crate-type = ["lib", "cdylib", "staticlib"]
 name = "browsion"
 path = "src/main.rs"
 
-[[bin]]
-name = "browsion-mcp"
-path = "src/bin/browsion-mcp.rs"
-
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
@@ -43,16 +39,11 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "str
 tokio-tungstenite = { version = "0.21", features = ["rustls-tls-webpki-roots"] }
 zip = "0.6"
 
-# Local HTTP API for MCP / automation
+# Local HTTP API for browser automation
 axum = { version = "0.7", features = ["json", "ws"] }
 tower-http = { version = "0.5", features = ["cors"] }
 tower = { version = "0.5", features = ["limit"] }
-
-# MCP Server SDK (official)
-rmcp = { version = "0.16", features = ["server", "transport-io", "macros"] }
 base64 = "0.22"
-schemars = "0.8"
-anyhow = "1"
 
 # Platform-specific dependencies
 [target.'cfg(windows)'.dependencies]

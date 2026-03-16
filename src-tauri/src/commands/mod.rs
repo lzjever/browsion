@@ -1,13 +1,9 @@
-pub mod mcp_tools;
 pub mod proxy;
 pub mod recording;
 pub mod snapshots;
-pub mod workflow;
-pub use mcp_tools::{detect_mcp_tools, find_mcp_binary, write_browsion_to_tool};
 pub use proxy::{add_proxy_preset, delete_proxy_preset, get_proxy_presets, test_proxy, update_proxy_preset};
-pub use recording::{delete_recording, get_recording, list_recordings, recording_to_workflow, save_recording};
+pub use recording::{delete_recording, get_recording, list_recordings, save_recording};
 pub use snapshots::{create_snapshot, delete_snapshot, list_snapshots, restore_snapshot};
-pub use workflow::{delete_workflow, get_step_types, get_workflow, list_workflows, run_workflow, save_workflow, validate_workflow_step};
 
 use crate::config::schema::BrowserSource;
 use crate::config::{validation, BrowserProfile};
@@ -31,6 +27,11 @@ pub async fn get_profiles(state: State<'_, Arc<AppState>>) -> Result<Vec<Browser
 pub async fn get_effective_chrome_path_from_config(
     config: &crate::config::AppConfig,
 ) -> Result<PathBuf, String> {
+    if let Some(path) = &config.chrome_path {
+        validation::validate_chrome_path(path).map_err(|e| e.to_string())?;
+        return Ok(path.clone());
+    }
+
     match &config.browser_source {
         BrowserSource::Custom { path, .. } => {
             validation::validate_chrome_path(path).map_err(|e| e.to_string())?;
@@ -318,7 +319,7 @@ pub async fn update_settings(
     Ok(())
 }
 
-/// Get MCP / API server configuration
+/// Get local HTTP API configuration
 #[tauri::command]
 pub async fn get_mcp_config(
     state: State<'_, Arc<AppState>>,
@@ -327,7 +328,15 @@ pub async fn get_mcp_config(
     Ok(config.mcp.clone())
 }
 
-/// Update MCP / API server configuration.
+/// Get local HTTP API configuration.
+#[tauri::command]
+pub async fn get_local_api_config(
+    state: State<'_, Arc<AppState>>,
+) -> Result<crate::config::schema::McpConfig, String> {
+    get_mcp_config(state).await
+}
+
+/// Update local HTTP API configuration.
 /// Saves to disk, then stops and optionally restarts the HTTP API server.
 #[tauri::command]
 pub async fn update_mcp_config(
@@ -370,6 +379,15 @@ pub async fn update_mcp_config(
     Ok(())
 }
 
+/// Update local HTTP API configuration.
+#[tauri::command]
+pub async fn update_local_api_config(
+    local_api: crate::config::schema::McpConfig,
+    state: State<'_, Arc<AppState>>,
+) -> Result<(), String> {
+    update_mcp_config(local_api, state).await
+}
+
 /// Get recently launched profiles
 #[tauri::command]
 pub async fn get_recent_profiles(
@@ -387,4 +405,3 @@ pub async fn get_recent_profiles(
 
     Ok(recent_profiles)
 }
-

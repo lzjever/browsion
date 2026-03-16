@@ -44,6 +44,142 @@ fn glob_match(pattern: &str, text: &str) -> bool {
     true
 }
 
+fn manual_recording_script() -> &'static str {
+    r#"
+        (function() {
+            if (window.__browsion_recording__) {
+                console.log('__BROWSION_ALREADY_ACTIVE__');
+                return;
+            }
+            window.__browsion_recording__ = true;
+
+            function getSelector(el) {
+                if (el.id) return '#' + el.id;
+                if (typeof el.className === 'string' && el.className) {
+                    const classes = el.className.split(' ').filter(c => c).join('.');
+                    if (classes) return '.' + classes;
+                }
+                const path = [];
+                while (el && el.nodeType === Node.ELEMENT_NODE) {
+                    let selector = el.nodeName.toLowerCase();
+                    if (el.id) {
+                        selector += '#' + el.id;
+                        path.unshift(selector);
+                        break;
+                    } else {
+                        let sibling = el;
+                        let nth = 1;
+                        while (sibling = sibling.previousElementSibling) {
+                            if (sibling.nodeName === el.nodeName) nth++;
+                        }
+                        if (nth !== 1) selector += `:nth-of-type(${nth})`;
+                    }
+                    path.unshift(selector);
+                    el = el.parentElement;
+                }
+                return path.join(' > ');
+            }
+
+            function recordEvent(type, data) {
+                console.log('__BROWSION_EVENT__', JSON.stringify({
+                    type,
+                    data,
+                    timestamp: Date.now()
+                }));
+            }
+
+            document.addEventListener('click', (e) => {
+                const target = e.target;
+                recordEvent('click', {
+                    selector: getSelector(target),
+                    x: e.clientX,
+                    y: e.clientY
+                });
+            }, true);
+
+            document.addEventListener('input', (e) => {
+                const target = e.target;
+                recordEvent('input', {
+                    selector: getSelector(target),
+                    text: target.value || '',
+                    tag_name: target.tagName ? target.tagName.toLowerCase() : '',
+                    input_type: target.type || ''
+                });
+            }, true);
+
+            document.addEventListener('change', (e) => {
+                const target = e.target;
+                let value;
+                if (target.type === 'checkbox') {
+                    value = target.checked;
+                } else if (target.type === 'radio') {
+                    value = target.checked ? target.value : null;
+                } else {
+                    value = target.value;
+                }
+                recordEvent('change', {
+                    selector: getSelector(target),
+                    value,
+                    tag_name: target.tagName ? target.tagName.toLowerCase() : '',
+                    input_type: target.type || ''
+                });
+            }, true);
+
+            document.addEventListener('keydown', (e) => {
+                if (e.ctrlKey || e.altKey || e.metaKey || e.key === 'Enter' || e.key === 'Tab' || e.key === 'Escape') {
+                    recordEvent('keydown', {
+                        key: e.key,
+                        ctrlKey: e.ctrlKey,
+                        altKey: e.altKey,
+                        shiftKey: e.shiftKey,
+                        metaKey: e.metaKey
+                    });
+                }
+            }, true);
+
+            document.addEventListener('visibilitychange', () => {
+                if (document.visibilityState === 'visible') {
+                    recordEvent('tab_activated', {
+                        url: window.location.href,
+                        title: document.title || ''
+                    });
+                }
+            }, true);
+
+            const originalOpen = window.open;
+            window.open = function(url, target, features) {
+                console.log('__BROWSION_EVENT__', JSON.stringify({
+                    type: 'window_open',
+                    data: {
+                        url: url,
+                        target: target || '_blank',
+                        features: features || ''
+                    },
+                    timestamp: Date.now()
+                }));
+                return originalOpen.call(this, url, target, features);
+            };
+
+            document.addEventListener('click', (e) => {
+                const target = e.target.closest('a');
+                if (target && target.target === '_blank') {
+                    console.log('__BROWSION_EVENT__', JSON.stringify({
+                        type: 'link_with_target_blank',
+                        data: {
+                            selector: getSelector(target),
+                            href: target.href,
+                            text: (target.textContent || '').trim()
+                        },
+                        timestamp: Date.now()
+                    }));
+                }
+            }, true);
+
+            console.log('__BROWSION_READY__');
+        })();
+    "#
+}
+
 /// Per-tab state saved/restored on tab switch.
 #[derive(Default, Clone)]
 struct TabState {
@@ -198,7 +334,7 @@ impl CDPClient {
             tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
 
             // Step 1: get browser-level WS URL from /json/version
-            let version_url = format!("http://localhost:{}/json/version", self.cdp_port);
+            let version_url = format!("http://127.0.0.1:{}/json/version", self.cdp_port);
             let version_resp = match reqwest::get(&version_url).await {
                 Ok(r) if r.status().is_success() => r,
                 Ok(r) => {
@@ -253,10 +389,18 @@ impl CDPClient {
                 .cloned()
                 .unwrap_or_default();
 
-            // Step 5: find the first page target
+            // Step 5: pick the most useful page target. Prefer a non-blank page so
+            // verification clients attach to the page the user is actually using.
             let page_target = target_infos
                 .iter()
-                .find(|t| t["type"].as_str() == Some("page"));
+                .find(|t| {
+                    t["type"].as_str() == Some("page")
+                        && t["url"]
+                            .as_str()
+                            .map(|url| !url.is_empty() && url != "about:blank")
+                            .unwrap_or(false)
+                })
+                .or_else(|| target_infos.iter().find(|t| t["type"].as_str() == Some("page")));
 
             let target_id = match page_target {
                 Some(t) => t["targetId"].as_str().unwrap_or("").to_string(),
@@ -352,6 +496,7 @@ impl CDPClient {
         let is_recording_for_reader = self.is_recording.clone();
         let ws_tx_for_reader = ws_tx_arc.clone();
         let msg_id_for_reader = self.msg_id.clone();
+        let active_target_for_reader = self.active_target_id.clone();
         let _profile_id_for_reader = self.profile_id.clone();
         let recording_manager_for_reader = self.recording_manager.clone();
 
@@ -387,6 +532,8 @@ impl CDPClient {
                                     "Target.attachedToTarget" => {
                                         let target_id = params["targetInfo"]["targetId"]
                                             .as_str().unwrap_or("").to_string();
+                                        let target_type = params["targetInfo"]["type"]
+                                            .as_str().unwrap_or("").to_string();
                                         let new_session_id = params["sessionId"]
                                             .as_str().unwrap_or("").to_string();
                                         let url = params["targetInfo"]["url"]
@@ -396,6 +543,39 @@ impl CDPClient {
                                         tab.session_id = new_session_id;
                                         if !url.is_empty() { tab.url = url; }
                                         tracing::debug!("Tab attached: {}", target_id);
+
+                                        let should_inject = {
+                                            let is_recording = is_recording_for_reader.lock().await;
+                                            *is_recording && target_type == "page"
+                                        };
+
+                                        if should_inject {
+                                            let ws_clone = ws_tx_for_reader.clone();
+                                            let mid = msg_id_for_reader.clone();
+                                            let sid = params["sessionId"]
+                                                .as_str().unwrap_or("").to_string();
+                                            tokio::spawn(async move {
+                                                let id = {
+                                                    let mut m = mid.lock().await;
+                                                    *m += 1;
+                                                    *m
+                                                };
+                                                let cmd = serde_json::json!({
+                                                    "id": id,
+                                                    "method": "Runtime.evaluate",
+                                                    "params": {
+                                                        "expression": manual_recording_script(),
+                                                        "returnByValue": true,
+                                                        "awaitPromise": true
+                                                    },
+                                                    "sessionId": sid
+                                                });
+                                                let _ = ws_clone
+                                                    .lock().await
+                                                    .send(WsMessage::Text(cmd.to_string()))
+                                                    .await;
+                                            });
+                                        }
                                     }
                                     "Target.targetCreated" => {
                                         let target_id = params["targetInfo"]["targetId"]
@@ -539,6 +719,48 @@ impl CDPClient {
                                         // Check for manual recording events: __BROWSION_EVENT__
                                         if args.len() >= 2 && args[0] == "__BROWSION_EVENT__" {
                                             tracing::info!("Got manual recording event: {}", args.get(1).unwrap_or(&String::new()));
+                                            if let Ok(event_data) = serde_json::from_str::<serde_json::Value>(&args[1]) {
+                                                if event_data.get("type").and_then(|v| v.as_str()) == Some("tab_activated") {
+                                                    let target_id = {
+                                                        let reg = tab_registry.lock().await;
+                                                        reg.iter()
+                                                            .find_map(|(target_id, tab)| {
+                                                                if tab.session_id == session_id {
+                                                                    Some(target_id.clone())
+                                                                } else {
+                                                                    None
+                                                                }
+                                                            })
+                                                    };
+
+                                                    if let (Some(target_id), Some(ref manager)) =
+                                                        (target_id, recording_manager_for_reader.as_ref())
+                                                    {
+                                                        if manager.is_recording(&_profile_id_for_reader) {
+                                                            let mut active_target = active_target_for_reader.lock().await;
+                                                            if *active_target != target_id {
+                                                                let previous_target_id = if active_target.is_empty() {
+                                                                    None
+                                                                } else {
+                                                                    Some(active_target.clone())
+                                                                };
+                                                                let action_params = serde_json::json!({
+                                                                    "target_id": target_id.clone(),
+                                                                    "previous_target_id": previous_target_id,
+                                                                });
+                                                                let _ = manager.add_action(
+                                                                    &_profile_id_for_reader,
+                                                                    crate::recording::schema::RecordedActionType::SwitchTab,
+                                                                    action_params
+                                                                ).map_err(|e| {
+                                                                    tracing::error!("Failed to record switch tab action from visibility event: {}", e);
+                                                                });
+                                                                *active_target = target_id;
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
                                         }
 
                                         let mut log = console_log.lock().await;
@@ -569,99 +791,12 @@ impl CDPClient {
                                     // ── Page: navigation events for auto-reinject ──
                                     "Page.loadEventFired" => {
                                         // Check if we need to re-inject recording listeners
-                                        let is_recording = is_recording_for_reader.lock().await;
-                                        if *is_recording {
+                                        let should_inject = {
+                                            let is_recording = is_recording_for_reader.lock().await;
+                                            *is_recording
+                                        };
+                                        if should_inject {
                                             tracing::info!("Page loaded, re-injecting recording listeners");
-                                            // Re-inject listeners by sending Runtime.evaluate command
-                                            let script = r#"
-                                                (function() {
-                                                    if (window.__browsion_recording__) return;
-                                                    window.__browsion_recording__ = true;
-
-                                                    function getSelector(el) {
-                                                        if (el.id) return '#' + el.id;
-                                                        if (el.className) {
-                                                            const classes = el.className.split(' ').filter(c => c).join('.');
-                                                            if (classes) return '.' + classes;
-                                                        }
-                                                        const path = [];
-                                                        while (el && el.nodeType === Node.ELEMENT_NODE) {
-                                                            let selector = el.nodeName.toLowerCase();
-                                                            if (el.id) {
-                                                                selector += '#' + el.id;
-                                                                path.unshift(selector);
-                                                                break;
-                                                            } else {
-                                                                let sibling = el;
-                                                                let nth = 1;
-                                                                while (sibling = sibling.previousElementSibling) {
-                                                                    if (sibling.nodeName === el.nodeName) nth++;
-                                                                }
-                                                                if (nth !== 1) selector += `:nth-of-type(${nth})`;
-                                                            }
-                                                            path.unshift(selector);
-                                                            el = el.parentElement;
-                                                        }
-                                                        return path.join(' > ');
-                                                    }
-
-                                                    function recordEvent(type, data) {
-                                                        console.log('__BROWSION_EVENT__', JSON.stringify({
-                                                            type: type,
-                                                            data: data,
-                                                            timestamp: Date.now()
-                                                        }));
-                                                    }
-
-                                                    document.addEventListener('click', (e) => {
-                                                        const selector = getSelector(e.target);
-                                                        recordEvent('click', {
-                                                            selector: selector,
-                                                            x: e.clientX,
-                                                            y: e.clientY
-                                                        });
-                                                    }, true);
-
-                                                    document.addEventListener('input', (e) => {
-                                                        const selector = getSelector(e.target);
-                                                        const value = e.target.value || '';
-                                                        recordEvent('input', {
-                                                            selector: selector,
-                                                            value: value
-                                                        });
-                                                    }, true);
-
-                                                    document.addEventListener('change', (e) => {
-                                                        const selector = getSelector(e.target);
-                                                        let value;
-                                                        if (e.target.type === 'checkbox') {
-                                                            value = e.target.checked;
-                                                        } else if (e.target.type === 'radio') {
-                                                            value = e.target.checked ? e.target.value : null;
-                                                        } else {
-                                                            value = e.target.value;
-                                                        }
-                                                        recordEvent('change', {
-                                                            selector: selector,
-                                                            value: value
-                                                        });
-                                                    }, true);
-
-                                                    document.addEventListener('keydown', (e) => {
-                                                        if (e.ctrlKey || e.altKey || e.metaKey || e.key === 'Enter' || e.key === 'Tab' || e.key === 'Escape') {
-                                                            recordEvent('keydown', {
-                                                                key: e.key,
-                                                                ctrlKey: e.ctrlKey,
-                                                                altKey: e.altKey,
-                                                                shiftKey: e.shiftKey,
-                                                                metaKey: e.metaKey
-                                                            });
-                                                        }
-                                                    }, true);
-
-                                                    console.log('__BROWSION_READY__');
-                                                })();
-                                            "#;
                                             // Send Runtime.evaluate command
                                             let mid = {
                                                 let mut m = msg_id_for_reader.lock().await;
@@ -672,7 +807,7 @@ impl CDPClient {
                                                 "id": mid,
                                                 "method": "Runtime.evaluate",
                                                 "params": {
-                                                    "expression": script,
+                                                    "expression": manual_recording_script(),
                                                     "returnByValue": true,
                                                     "awaitPromise": true
                                                 },
@@ -3149,140 +3284,7 @@ impl CDPClient {
         // Set recording flag
         *self.is_recording.lock().await = true;
 
-        let script = r#"
-            (function() {
-                // Avoid duplicate listeners
-                if (window.__browsion_recording__) {
-                    console.log('__BROWSION_ALREADY_ACTIVE__');
-                    return;
-                }
-                window.__browsion_recording__ = true;
-
-                // Helper to get a unique selector for an element
-                function getSelector(el) {
-                    if (el.id) return '#' + el.id;
-                    if (el.className) {
-                        const classes = el.className.split(' ').filter(c => c).join('.');
-                        if (classes) return '.' + classes;
-                    }
-                    const path = [];
-                    while (el && el.nodeType === Node.ELEMENT_NODE) {
-                        let selector = el.nodeName.toLowerCase();
-                        if (el.id) {
-                            selector += '#' + el.id;
-                            path.unshift(selector);
-                            break;
-                        } else {
-                            let sibling = el;
-                            let nth = 1;
-                            while (sibling = sibling.previousElementSibling) {
-                                if (sibling.nodeName === el.nodeName) nth++;
-                            }
-                            if (nth !== 1) selector += `:nth-of-type(${nth})`;
-                        }
-                        path.unshift(selector);
-                        el = el.parentElement;
-                    }
-                    return path.join(' > ');
-                }
-
-                // Record event
-                function recordEvent(type, data) {
-                    console.log('__BROWSION_EVENT__', JSON.stringify({
-                        type: type,
-                        data: data,
-                        timestamp: Date.now()
-                    }));
-                }
-
-                // Click events
-                document.addEventListener('click', (e) => {
-                    const selector = getSelector(e.target);
-                    recordEvent('click', {
-                        selector: selector,
-                        x: e.clientX,
-                        y: e.clientY
-                    });
-                }, true);
-
-                // Input events
-                document.addEventListener('input', (e) => {
-                    const selector = getSelector(e.target);
-                    const value = e.target.value || '';
-                    recordEvent('input', {
-                        selector: selector,
-                        value: value
-                    });
-                }, true);
-
-                // Change events (for selects, checkboxes, etc.)
-                document.addEventListener('change', (e) => {
-                    const selector = getSelector(e.target);
-                    let value;
-                    if (e.target.type === 'checkbox') {
-                        value = e.target.checked;
-                    } else if (e.target.type === 'radio') {
-                        value = e.target.checked ? e.target.value : null;
-                    } else {
-                        value = e.target.value;
-                    }
-                    recordEvent('change', {
-                        selector: selector,
-                        value: value
-                    });
-                }, true);
-
-                // Key press events (for keyboard shortcuts)
-                document.addEventListener('keydown', (e) => {
-                    // Only record special keys, not normal typing
-                    if (e.ctrlKey || e.altKey || e.metaKey || e.key === 'Enter' || e.key === 'Tab' || e.key === 'Escape') {
-                        recordEvent('keydown', {
-                            key: e.key,
-                            ctrlKey: e.ctrlKey,
-                            altKey: e.altKey,
-                            shiftKey: e.shiftKey,
-                            metaKey: e.metaKey
-                        });
-                    }
-                }, true);
-
-                // Intercept window.open() calls
-                const originalOpen = window.open;
-                window.open = function(url, target, features) {
-                    console.log('__BROWSION_EVENT__', JSON.stringify({
-                        type: 'window_open',
-                        data: {
-                            url: url,
-                            target: target || '_blank',
-                            features: features || ''
-                        },
-                        timestamp: Date.now()
-                    }));
-                    // Still call the original function
-                    return originalOpen.call(this, url, target, features);
-                };
-
-                // Intercept target="_blank" links
-                document.addEventListener('click', (e) => {
-                    const target = e.target.closest('a');
-                    if (target && target.target === '_blank') {
-                        console.log('__BROWSION_EVENT__', JSON.stringify({
-                            type: 'link_with_target_blank',
-                            data: {
-                                selector: getSelector(target),
-                                href: target.href,
-                                text: target.textContent.trim()
-                            },
-                            timestamp: Date.now()
-                        }));
-                    }
-                }, true);
-
-                console.log('__BROWSION_READY__');
-            })();
-        "#;
-
-        let result = self.evaluate_js(script).await?;
+        let result = self.evaluate_js(manual_recording_script()).await?;
         tracing::info!("Manual recording script injected, result: {:?}", result);
         Ok(())
     }

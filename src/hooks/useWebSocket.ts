@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { tauriApi } from '../api/tauri';
 
 export interface WsEvent {
-  type: 'BrowserStatusChanged' | 'ActionLogEntry' | 'ProfilesChanged' | 'Heartbeat';
+  type: 'BrowserStatusChanged' | 'ActionLogEntry' | 'ProfilesChanged' | 'RecordingPlaybackProgress' | 'Heartbeat';
   data?: any;
 }
 
@@ -21,10 +21,21 @@ export interface ActionLogEntryEvent {
   error?: string;
 }
 
+export interface RecordingPlaybackProgressEvent {
+  recording_id: string;
+  profile_id: string;
+  action_index: number;
+  total_actions: number;
+  action_type: string;
+  status: 'running' | 'failed' | 'completed';
+  error?: string;
+}
+
 interface UseWebSocketOptions {
   onBrowserStatus?: (event: BrowserStatusEvent) => void;
   onActionLog?: (entry: ActionLogEntryEvent) => void;
   onProfilesChanged?: () => void;
+  onRecordingPlaybackProgress?: (event: RecordingPlaybackProgressEvent) => void;
   onConnect?: () => void;
   onDisconnect?: () => void;
 }
@@ -42,15 +53,15 @@ export const useWebSocket = (options: UseWebSocketOptions = {}) => {
 
   const connect = async () => {
     try {
-      const config = await tauriApi.getMcpConfig();
+      const config = await tauriApi.getLocalApiConfig();
       if (!config?.enabled) {
         setError('API server not enabled');
         return;
       }
 
-      const wsUrl = `ws://127.0.0.1:${config.api_port}/api/ws`;
-      // Note: WebSocket doesn't support custom headers in browser API
-      // API key auth is handled via same-origin policy (localhost only)
+      const wsUrl = config.api_key
+        ? `ws://127.0.0.1:${config.api_port}/api/ws?api_key=${encodeURIComponent(config.api_key)}`
+        : `ws://127.0.0.1:${config.api_port}/api/ws`;
 
       const ws = new WebSocket(wsUrl);
       wsRef.current = ws;
@@ -96,6 +107,9 @@ export const useWebSocket = (options: UseWebSocketOptions = {}) => {
               break;
             case 'ProfilesChanged':
               options.onProfilesChanged?.();
+              break;
+            case 'RecordingPlaybackProgress':
+              options.onRecordingPlaybackProgress?.(wsEvent.data as RecordingPlaybackProgressEvent);
               break;
             case 'Heartbeat':
               // Just reset heartbeat timer

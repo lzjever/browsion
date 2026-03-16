@@ -73,214 +73,36 @@ Or in any shell: `unset ARGV0` then run `cargo` as usual.
   - `○` = stopped → click to launch
 - **Close main window**: Auto-minimize to tray (configurable)
 
-## Local API & MCP (Automation)
+## Local API
 
-When `api_port` is set to a non-zero value in config (default **38472**), Browsion runs a local HTTP API on `http://127.0.0.1:{port}` so that external tools (MCP clients, scripts, AI agents) can manage profiles and **control browsers**.
+Browsion exposes a local HTTP API on `http://127.0.0.1:{port}` for profile management, browser control, recording, and playback.
 
-### HTTP API
+Common endpoints:
+- `GET /api/profiles`
+- `POST /api/launch/:profile_id`
+- `POST /api/browser/:id/navigate`
+- `POST /api/browser/:id/click`
+- `POST /api/browser/:id/type`
+- `POST /api/recordings/start/:profile_id`
+- `POST /api/recordings/:id/play/:profile_id`
+- `GET /api/settings`
+- `GET /api/browser-source`
+- `GET /api/local-api`
 
-**Profile CRUD:**
-- `GET /api/profiles` — list profiles (includes `is_running` flag)
-- `GET /api/profiles/:id` — get one profile
-- `POST /api/profiles` — add profile (JSON body)
-- `PUT /api/profiles/:id` — update profile (JSON body)
-- `DELETE /api/profiles/:id` — delete profile
+Full curl examples and endpoint notes live in [docs/local-api.md](docs/local-api.md).
+Real-time WebSocket examples for playback progress are also documented there.
+The product-facing API boundary and stability classification live in [docs/local-api-inventory.md](docs/local-api-inventory.md).
 
-**Browser Lifecycle:**
-- `POST /api/launch/:profile_id` — launch browser, returns `{ pid, cdp_port }`
-- `POST /api/kill/:profile_id` — kill running browser
-- `GET /api/running` — list all running browsers with PID, CDP port, launch time
+### Recommended automation flow
 
-**Navigation:**
-- `POST /api/browser/:id/navigate` — `{ url, wait_until?, timeout_ms? }`
-- `POST /api/browser/:id/navigate_wait` — `{ url, wait_until, timeout_ms }`
-- `GET /api/browser/:id/url` — get current URL
-- `GET /api/browser/:id/title` — get page title
-- `POST /api/browser/:id/back` — go back
-- `POST /api/browser/:id/forward` — go forward
-- `POST /api/browser/:id/reload` — reload page
-- `POST /api/browser/:id/wait_for_navigation` — `{ timeout_ms }`
-- `POST /api/browser/:id/wait_for_url` — `{ pattern, timeout_ms }`
-
-**Mouse:**
-- `POST /api/browser/:id/click` — `{ selector }`
-- `POST /api/browser/:id/hover` — `{ selector }`
-- `POST /api/browser/:id/double_click` — `{ selector }`
-- `POST /api/browser/:id/right_click` — `{ selector }`
-- `POST /api/browser/:id/click_at` — `{ x, y }`
-- `POST /api/browser/:id/drag` — `{ from_selector, to_selector }`
-
-**Keyboard:**
-- `POST /api/browser/:id/type` — `{ selector, text }`
-- `POST /api/browser/:id/slow_type` — `{ selector, text, delay_ms }`
-- `POST /api/browser/:id/press_key` — `{ key }`
-
-**Forms:**
-- `POST /api/browser/:id/select` — `{ selector, value }`
-- `POST /api/browser/:id/upload` — `{ selector, file_path }`
-
-**Scroll/Wait:**
-- `POST /api/browser/:id/scroll` — `{ selector?, delta_x?, delta_y?, direction?, amount? }`
-- `POST /api/browser/:id/scroll_element` — `{ selector, delta_x, delta_y }`
-- `POST /api/browser/:id/scroll_into_view` — `{ selector }`
-- `POST /api/browser/:id/wait_for` — `{ selector, timeout_ms }`
-- `POST /api/browser/:id/wait_for_text` — `{ text, timeout_ms }`
-- `POST /api/browser/:id/wait` — `{ ms }`
-
-**Observe:**
-- `GET /api/browser/:id/screenshot` — `?full_page=&format=&quality=` → base64 image
-- `POST /api/browser/:id/screenshot_element` — `{ selector, format?, quality? }`
-- `GET /api/browser/:id/page_state` — URL + title + AX tree with ref_ids
-- `GET /api/browser/:id/ax_tree` — accessibility tree with ref_ids
-- `GET /api/browser/:id/dom_context` — structured DOM with elements/forms/links
-- `POST /api/browser/:id/extract` — `{ selectors: { key: "css" } }`
-- `GET /api/browser/:id/page_text` — full `document.body.innerText`
-
-**AX-Ref (semantic element interaction):**
-- `POST /api/browser/:id/click_ref` — `{ ref_id }` — click by AX tree ref
-- `POST /api/browser/:id/type_ref` — `{ ref_id, text }` — type by AX tree ref
-- `POST /api/browser/:id/focus_ref` — `{ ref_id }` — focus by AX tree ref
-
-**JavaScript:**
-- `POST /api/browser/:id/evaluate` — `{ expression }` → JS result (awaits Promises)
-
-**Tabs:**
-- `GET /api/browser/:id/tabs` — list tabs
-- `POST /api/browser/:id/tabs/new` — `{ url }` → new tab info
-- `POST /api/browser/:id/tabs/switch` — `{ target_id }`
-- `POST /api/browser/:id/tabs/close` — `{ target_id }`
-- `POST /api/browser/:id/wait_for_new_tab` — `{ timeout_ms }` → target_id
-
-**Cookies:**
-- `GET /api/browser/:id/cookies` — get cookies
-- `POST /api/browser/:id/cookies/set` — `{ name, value, domain, path }`
-- `POST /api/browser/:id/cookies/clear` — delete all cookies
-
-**Console:**
-- `POST /api/browser/:id/console/enable` — start capturing console output
-- `GET /api/browser/:id/console` — get recent console logs
-- `POST /api/browser/:id/console/clear` — clear log buffer
-
-**Network:**
-- `GET /api/browser/:id/network_log` — request/response log
-- `POST /api/browser/:id/network_log/clear` — clear log
-- `POST /api/browser/:id/intercept/block` — `{ url_pattern }` — block URLs
-- `POST /api/browser/:id/intercept/mock` — `{ url_pattern, status, body, content_type }` — mock response
-- `POST /api/browser/:id/intercept/clear` — clear intercept rules
-
-**Dialog:**
-- `POST /api/browser/:id/dialog` — `{ accept, prompt_text? }` — handle alert/confirm/prompt
-
-**Emulation:**
-- `POST /api/browser/:id/emulate` — viewport, user-agent, geolocation
-
-**Storage:**
-- `GET /api/browser/:id/storage/:type` — get localStorage/sessionStorage
-- `POST /api/browser/:id/storage/:type` — set item
-- `DELETE /api/browser/:id/storage/:type` — clear storage
-
-**Touch:**
-- `POST /api/browser/:id/tap` — `{ selector }` — mobile tap
-- `POST /api/browser/:id/swipe` — `{ selector, direction, distance }`
-
-**PDF:**
-- `GET /api/browser/:id/pdf` — `?landscape=&display_header_footer=…` → base64 PDF
-
-**Frames:**
-- `GET /api/browser/:id/frames` — list frames
-- `POST /api/browser/:id/frames/switch` — `{ frame_id }`
-- `POST /api/browser/:id/frames/main` — switch back to main frame
-
-**Utility:**
-- `GET /api/health` — health check
-
-### MCP Server (browsion-mcp)
-
-The **browsion-mcp** binary implements the [Model Context Protocol](https://modelcontextprotocol.io/) over stdio, exposing **73 tools** for AI agents to manage profiles and control browsers.
-
-**Setup:**
-
-1. Start Browsion (with `api_port > 0` in config, default 38472).
-2. Build the MCP binary:
-
-```bash
-cd src-tauri && cargo build --release --bin browsion-mcp
-```
-
-3. Add to your MCP client config:
-
-**Claude Desktop** (`~/Library/Application Support/Claude/claude_desktop_config.json`):
-
-```json
-{
-  "mcpServers": {
-    "browsion": {
-      "command": "/path/to/target/release/browsion-mcp"
-    }
-  }
-}
-```
-
-**Cursor** (`.cursor/mcp.json`):
-
-```json
-{
-  "mcpServers": {
-    "browsion": {
-      "command": "/path/to/target/release/browsion-mcp"
-    }
-  }
-}
-```
-
-Set `BROWSION_API_PORT` env var if you use a non-default port.
-Set `BROWSION_API_KEY` env var if you configured an API key.
-
-**Tools (73):**
-
-| Category | Tools |
-|---|---|
-| Profile | `list_profiles`, `get_profile`, `create_profile`, `update_profile`, `delete_profile` |
-| Lifecycle | `launch_browser`, `kill_browser`, `get_running_browsers` |
-| Navigation | `navigate`, `go_back`, `go_forward`, `reload`, `wait_for_navigation`, `get_current_url`, `get_page_title` |
-| Mouse | `click`, `hover`, `double_click`, `right_click`, `click_at`, `drag` |
-| Keyboard | `type_text`, `slow_type`, `press_key` |
-| Forms | `select_option`, `upload_file` |
-| Scroll/Wait | `scroll`, `scroll_element`, `scroll_into_view`, `wait_for_element`, `wait_for_text`, `wait_for_url` |
-| Observe | `get_page_state`, `get_ax_tree`, `screenshot`, `screenshot_element`, `get_dom_context`, `extract_data`, `get_page_text` |
-| AX-Ref | `click_ref`, `type_ref`, `focus_ref` |
-| JavaScript | `evaluate_js` |
-| Tabs | `list_tabs`, `new_tab`, `switch_tab`, `close_tab`, `wait_for_new_tab` |
-| Cookies | `get_cookies`, `set_cookie`, `delete_cookies` |
-| Console | `enable_console_capture`, `get_console_logs`, `clear_console` |
-| Network | `get_network_log`, `clear_network_log`, `block_url`, `mock_url`, `clear_intercepts` |
-| Dialog | `handle_dialog` |
-| Emulation | `emulate` |
-| Storage | `get_storage`, `set_storage`, `clear_storage` |
-| Touch | `tap`, `swipe` |
-| PDF | `print_to_pdf` |
-| Frames | `get_frames`, `switch_frame`, `main_frame` |
-| Utility | `wait` |
-
-### Recommended AI Agent Workflow
-
-```
-1. list_profiles          → find profile id
-2. launch_browser         → start Chrome
-3. navigate               → go to URL (waits for load)
-4. get_page_state         → URL + title + AX tree with ref_ids
-5. click_ref / type_ref   → interact via semantic refs (preferred over CSS selectors)
-6. screenshot             → visual verification
-7. kill_browser           → cleanup
-```
-
-### New Tab Workflow (for target="_blank" links)
-
-```
-1. wait_for_new_tab(timeout_ms=5000)   ← call BEFORE the click
-2. click_ref("e5")                     ← click the link
-3. switch_tab(target_id=<from step 1>) ← switch to new tab
-4. get_page_state()                    ← observe new tab
+```text
+1. GET /api/profiles
+2. POST /api/launch/:profile_id
+3. POST /api/browser/:id/navigate
+4. GET /api/browser/:id/page_state
+5. POST /api/browser/:id/click or /type
+6. POST /api/recordings/start/:profile_id
+7. POST /api/recordings/:id/play/:profile_id
 ```
 
 ## ⚙️ Configuration
@@ -291,7 +113,10 @@ Configuration file: `~/.config/browsion/config.toml`
 # Browser: Chrome for Testing (auto-download) or custom path
 # Configured via Settings in the app
 
-api_port = 38472   # set to 0 to disable HTTP API
+[mcp]
+enabled = true
+api_port = 38472
+# api_key = "optional-secret"
 
 [settings]
 auto_start = false
@@ -314,7 +139,8 @@ headless = false
 
 ## Documentation
 
-- [docs/mcp-server-design.md](docs/mcp-server-design.md) - MCP server technical design
+- [docs/local-api.md](docs/local-api.md) - Local API curl usage
+- [docs/local-api-inventory.md](docs/local-api-inventory.md) - Local API product contract and stability levels
 - [TRAY_IMPROVEMENTS.md](TRAY_IMPROVEMENTS.md) - Tray functionality details
 
 ## Troubleshooting
@@ -344,7 +170,6 @@ sudo apt install wmctrl xdotool  # Ubuntu/Debian
 - **Build**: Vite 5
 - **Config**: TOML
 - **CDP**: tokio-tungstenite (flatten mode, multi-session)
-- **MCP**: rmcp 0.16 (official SDK, stdio transport)
 - **HTTP API**: axum 0.7
 
 ## Project Structure
@@ -356,8 +181,7 @@ browsion/
 │   │   ├── cdp.rs                # Full CDP WebSocket client (flatten mode)
 │   │   ├── session.rs            # CDP connection pool (SessionManager)
 │   │   └── types.rs              # DOMElement, AXNode, PageState, TabInfo, etc.
-│   ├── src/api/mod.rs            # HTTP API (70+ endpoints)
-│   ├── src/bin/browsion-mcp.rs   # MCP server binary (73 tools)
+│   ├── src/api/mod.rs            # HTTP API
 │   ├── src/config/               # Configuration schema & storage
 │   ├── src/process/              # Process lifecycle + CDP port allocation
 │   ├── src/window/               # Window activation
@@ -368,7 +192,8 @@ browsion/
 │   ├── api/                      # Tauri API wrapper
 │   └── types/                    # TypeScript type definitions
 ├── docs/
-│   └── mcp-server-design.md      # MCP server technical design document
+│   ├── local-api.md              # curl-based local API guide
+│   ├── local-api-inventory.md    # API contract, stability levels, build plan
 └── package.json
 ```
 

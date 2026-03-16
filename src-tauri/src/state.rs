@@ -4,7 +4,6 @@ use crate::api::ws::WsBroadcaster;
 use crate::config::AppConfig;
 use crate::process::ProcessManager;
 use crate::recording::{RecordingManager, RecordingSessionManager};
-use crate::workflow::WorkflowManager;
 use parking_lot::{Mutex, RwLock};
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter};
@@ -23,8 +22,6 @@ pub struct AppState {
     pub action_log: Arc<ActionLog>,
     /// WebSocket broadcaster for real-time events.
     pub ws_broadcaster: WsBroadcaster,
-    /// Workflow manager for automation workflows.
-    pub workflow_manager: Arc<WorkflowManager>,
     /// Recording manager for browser action recordings.
     pub recording_manager: Arc<RecordingManager>,
     /// Active recording session manager.
@@ -47,7 +44,6 @@ impl AppState {
             app_handle: Arc::new(Mutex::new(None)),
             action_log: Arc::new(ActionLog::new()),
             ws_broadcaster: WsBroadcaster::new(),
-            workflow_manager: Arc::new(WorkflowManager::new().unwrap_or_default()),
             recording_manager: Arc::new(RecordingManager::new().unwrap_or_default()),
             recording_session_manager,
         }
@@ -57,6 +53,13 @@ impl AppState {
     pub fn emit(&self, event: &str) {
         if let Some(handle) = &*self.app_handle.lock() {
             let _ = handle.emit(event, ());
+        }
+    }
+
+    /// Emit a Tauri event with payload to all frontend windows.
+    pub fn emit_payload<S: serde::Serialize + Clone>(&self, event: &str, payload: S) {
+        if let Some(handle) = &*self.app_handle.lock() {
+            let _ = handle.emit(event, payload);
         }
     }
 

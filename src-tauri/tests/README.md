@@ -26,8 +26,7 @@ All tests should follow the pattern: `test_<category>_<operation>_<variant>`
 - `touch` - Touch operations (tap, swipe)
 - `frames` - iframe handling (get_frames, switch_frame, main_frame)
 - `dialog` - Dialog handling (handle_dialog)
-- `workflow` - Workflow automation (create_workflow, run_workflow)
-- `recording` - Recording sessions (start_recording, stop_recording, recording_to_workflow)
+- `recording` - Recording sessions and playback (start_recording, stop_recording, play_recording)
 
 ## Running Tests
 
@@ -56,6 +55,6 @@ Tests run with `--test-threads=1` to avoid port conflicts.
 
 ## Current Coverage
 
-- **Total tests**: 47
+- **Total tests**: 46
 - All tests follow standardized `test_<category>_<operation>_<variant>` naming
-- Coverage includes: navigate, mouse, keyboard, form, axref, tabs, cookies, storage, console, network, screenshot, profile, lifecycle, snapshot, emulate, touch, frames, dialog, workflow, recording
+- Coverage includes: navigate, mouse, keyboard, form, axref, tabs, cookies, storage, console, network, screenshot, profile, lifecycle, snapshot, emulate, touch, frames, dialog, recording

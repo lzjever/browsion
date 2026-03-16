@@ -1,7 +1,7 @@
 //! WebSocket broadcast server for real-time browser events.
 //!
-//! Replaces polling in MonitorPage: browser status, action log entries,
-//! and profile changes are pushed to all connected clients.
+//! Pushes browser status, action log entries, and profile changes
+//! to all connected clients.
 
 use crate::state::AppState;
 use axum::{
@@ -40,6 +40,16 @@ pub enum WsEvent {
     },
     /// Profile added/updated/deleted.
     ProfilesChanged,
+    /// Recording playback progress.
+    RecordingPlaybackProgress {
+        recording_id: String,
+        profile_id: String,
+        action_index: usize,
+        total_actions: usize,
+        action_type: String,
+        status: String,
+        error: Option<String>,
+    },
     /// Heartbeat (sent every 30s to keep connection alive).
     Heartbeat,
 }
