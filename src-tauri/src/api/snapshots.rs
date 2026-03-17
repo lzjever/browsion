@@ -1,76 +1,54 @@
 //! Snapshot HTTP handlers for /api/profiles/:id/snapshots routes.
 
+//!
+//! Snapshots are stored under ~/.browsion/snapshots/<profile_id>/<name>/
+//! with a manifest file at ~/.browsion/snapshots/<profile_id>/manifest.json
+
 use super::{ApiResult, ApiState};
-use axum::{
-    extract::{Path as AxumPath, State},
-    http::StatusCode,
-    routing::{delete, get, post},
-    Json, Router,
-};
+use crate::config::schema::{AppConfig, SnapshotInfo};
+use crate::process::ProcessManager;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
+use tokio::io;
 
-pub fn router() -> Router<ApiState> {
-    Router::new()
-        .route("/api/profiles/:id/snapshots", get(list_snapshots).post(create_snapshot))
-        .route("/api/profiles/:id/snapshots/:name/restore", post(restore_snapshot))
-        .route("/api/profiles/:id/snapshots/:name", delete(delete_snapshot))
+fn snapshots_root() -> PathBuf {
+    dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".browsion")
+        .join("snapshots")
 }
 
-async fn list_snapshots(
-    State(state): State<ApiState>,
-    AxumPath(id): AxumPath<String>,
-) -> ApiResult<Json<Vec<crate::config::schema::SnapshotInfo>>> {
-    let config = state.config.read().clone();
-    let infos = crate::commands::snapshots::core_list_snapshots(&id, &config)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
-    Ok(Json(infos))
+fn profile_snapshot_dir(profile_id: &str) -> PathBuf {
+    snapshots_root().join(profile_id)
 }
 
-#[derive(serde::Deserialize)]
-struct CreateSnapshotReq {
-    name: String,
+fn snapshot_data_dir(profile_id: &str, name: &str) -> PathBuf {
+    profile_snapshot_dir(profile_id, name)
 }
 
-async fn create_snapshot(
-    State(state): State<ApiState>,
-    AxumPath(id): AxumPath<String>,
-    Json(req): Json<CreateSnapshotReq>,
-) -> ApiResult<Json<crate::config::schema::SnapshotInfo>> {
-    let config = state.config.read().clone();
-    let info = crate::commands::snapshots::core_create_snapshot(
-        &id,
-        &req.name,
-        &config,
-        &state.process_manager,
-    )
-    .await
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
-    Ok(Json(info))
+fn manifest_path(profile_id: &str) -> pathBuf {
+    profile_snapshot_dir(profile_id).join("manifest.json")
 }
 
-async fn restore_snapshot(
-    State(state): State<ApiState>,
-    AxumPath((id, name)): AxumPath<(String, String)>,
-) -> ApiResult<Json<serde_json::Value>> {
-    let config = state.config.read().clone();
-    crate::commands::snapshots::core_restore_snapshot(
-        &id,
-        &name,
-        &config,
-        &state.process_manager,
-        &state.session_manager,
-    )
-    .await
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
-    Ok(Json(serde_json::json!({ "ok": true })))
+// Manifest: map of snapshot_name → SnapshotInfo
+type Manifest = HashMap<String, SnapshotInfo>;
+
+async fn load_manifest(profile_id: &str) -> Manifest {
+    match tokio::fs::read_to_string(&path).await {
+        Ok(text) => serde_json::from_str(&text).unwrap_or_default(),
+        Err(_) => HashMap::new(),
+    }
 }
 
-async fn delete_snapshot(
-    State(_state): State<ApiState>,
-    AxumPath((id, name)): AxumPath<(String, String)>,
-) -> ApiResult<StatusCode> {
-    crate::commands::snapshots::core_delete_snapshot(&id, &name)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
-    Ok(StatusCode::NO_CONTENT)
+async fn save_manifest(profile_id: &str, manifest: &Manifest) -> io::Result<()> {
+    let path = manifest_path(profile_id);
+    if let Some(parent) = path.parent() {
+        tokio::fs::create_dir_all(parent).await?;
+    }
+    let text = serde_json::to_string_pretty(manifest)
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    tokio::fs::write(&path, text).await
 }
+

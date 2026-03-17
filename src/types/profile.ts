@@ -42,19 +42,6 @@ export interface AppSettings {
   minimize_to_tray: boolean;
 }
 
-export interface LocalApiConfig {
-  enabled: boolean;
-  api_port: number;
-  api_key?: string;
-}
-
-export interface ProcessInfo {
-  profile_id: string;
-  pid: number;
-  cdp_port?: number;
-  launched_at: number;
-}
-
 export type RunningStatus = Record<string, boolean>;
 
 export interface ProxyPreset {
@@ -69,65 +56,8 @@ export interface SnapshotInfo {
   size_bytes: number;
 }
 
-export interface ActionEntry {
-  id: string;
-  ts: number;
-  profile_id: string;
-  tool: string;
-  duration_ms: number;
-  success: boolean;
-  error?: string;
-}
-
-// Recording types
-export type RecordedActionType =
-  | 'navigate'
-  | 'go_back'
-  | 'go_forward'
-  | 'reload'
-  | 'click'
-  | 'hover'
-  | 'double_click'
-  | 'right_click'
-  | 'type'
-  | 'slow_type'
-  | 'press_key'
-  | 'select_option'
-  | 'upload_file'
-  | 'scroll'
-  | 'scroll_into_view'
-  | 'new_tab'
-  | 'switch_tab'
-  | 'close_tab'
-  | 'sleep'
-  | 'wait_for_text'
-  | 'wait_for_element'
-  | 'screenshot'
-  | 'get_console_logs'
-  | 'extract';
-
-export interface RecordedAction {
-  index: number;
-  type: RecordedActionType;
-  params: Record<string, unknown>;
-  timestamp_ms: number;
-  screenshot_base64: string | null;
-}
-
-export interface Recording {
-  id: string;
-  name: string;
-  description: string;
-  profile_id: string;
-  actions: RecordedAction[];
-  created_at: number;
-  duration_ms: number;
-}
-
-export interface RecordingSessionInfo {
-  id: string;
-  profile_id: string;
-  started_at: number;
-  action_count: number;
-  is_recording: boolean;
+export interface LocalApiConfig {
+  enabled: boolean;
+  api_port: number;
+  api_key?: string;
 }

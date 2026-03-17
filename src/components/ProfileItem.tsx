@@ -1,36 +1,28 @@
 import React from 'react';
-import type { BrowserProfile, RecordingSessionInfo } from '../types/profile';
+import type { BrowserProfile } from '../types/profile';
 
 interface ProfileItemProps {
   profile: BrowserProfile;
   isRunning: boolean;
   isLaunching?: boolean;
-  isRecording?: boolean;
-  recordingSession?: RecordingSessionInfo | null;
   onLaunch: (id: string) => void;
   onActivate: (id: string) => void;
   onKill: (id: string) => void;
   onEdit: (profile: BrowserProfile) => void;
   onClone: (profile: BrowserProfile) => void;
   onDelete: (id: string) => void;
-  onSnapshots?: (profile: BrowserProfile) => void;
-  onRecordToggle?: (profile: BrowserProfile) => void;
 }
 
 export const ProfileItem: React.FC<ProfileItemProps> = ({
   profile,
   isRunning,
   isLaunching = false,
-  isRecording = false,
-  recordingSession = null,
   onLaunch,
   onActivate,
   onKill,
   onEdit,
   onClone,
   onDelete,
-  onSnapshots,
-  onRecordToggle,
 }) => {
   return (
     <div className="profile-item">
@@ -71,11 +63,6 @@ export const ProfileItem: React.FC<ProfileItemProps> = ({
           <span className={`status-indicator ${isRunning ? 'running' : 'stopped'}`}>
             {isRunning ? '● Running' : '○ Stopped'}
           </span>
-          {isRecording && (
-            <span className="status-indicator recording">
-              🔴 Recording ({recordingSession?.action_count || 0} actions)
-            </span>
-          )}
         </div>
       </div>
 
@@ -96,14 +83,6 @@ export const ProfileItem: React.FC<ProfileItemProps> = ({
             <button className="btn btn-danger" onClick={() => onKill(profile.id)}>
               Kill
             </button>
-            {onRecordToggle && (
-              <button
-                className={`btn ${isRecording ? 'btn-warning' : 'btn-secondary'}`}
-                onClick={() => onRecordToggle(profile)}
-              >
-                {isRecording ? '⏹ Stop Recording' : '🔴 Start Recording'}
-              </button>
-            )}
           </>
         )}
         <button className="btn btn-secondary" onClick={() => onEdit(profile)}>
@@ -112,11 +91,6 @@ export const ProfileItem: React.FC<ProfileItemProps> = ({
         <button className="btn btn-info" onClick={() => onClone(profile)}>
           Clone
         </button>
-        {onSnapshots && (
-          <button className="btn btn-secondary" onClick={() => onSnapshots(profile)}>
-            Snapshots
-          </button>
-        )}
         <button
           className="btn btn-danger-outline"
           onClick={() => onDelete(profile.id)}

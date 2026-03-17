@@ -2,6 +2,59 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.11.0] - 2026-03-16
+
+### Major Changes
+
+#### Simplified Architecture
+Browsion is now a **Browser Profile Manager + CDP Port Exposer**. The MCP server and CDP command wrappers have been removed.
+
+- **Removed**: MCP server (`browsion-mcp` binary), Recording/Replay, Workflow engine, CDP command wrapper APIs (~70 endpoints), Action Log, CDPClient, SessionManager
+- **Kept**: Profile CRUD, Profile Snapshots, Browser lifecycle (launch/kill returning CDP port), WebSocket real-time status, Settings management, Proxy Presets
+- **HTTP API**: Reduced from 87 to 20 endpoints
+
+### Breaking Changes
+
+- **Removed MCP server** — The standalone `browsion-mcp` binary no longer exists. Use the HTTP API directly or connect to Chrome's CDP port.
+- **Removed Recording/Replay** — Recording session management and playback features removed
+- **Removed Workflow engine** — Workflow automation features removed
+- **Removed CDP command wrappers** — All browser control APIs (navigate, click, type, etc.) removed
+- **Removed Action Log** — In-memory action logging removed
+
+### New Features
+
+- **Launch returns CDP port** — `POST /api/launch/:profile_id` now returns `{"pid": 123, "cdp_port": 9222}` for direct CDP connection
+
+### Bug Fixes
+
+- **Browser status tracking** — Fixed status quickly reverting to "Stopped" after launch due to sysinfo cache timing. Added 5-second grace period and full process refresh for reliable status detection.
+
+### UI Changes
+
+- **Settings layout** — Proxy Presets section moved before Local API section
+- **Removed Snapshots button** — Snapshot functionality removed from profile cards (backend still available via API)
+
+### API Endpoints (20 total)
+
+| Category | Endpoints |
+|----------|-----------|
+| Profiles | `GET/POST/PUT/DELETE /api/profiles`, `GET/POST /api/profiles/:id/snapshots`, `POST .../snapshots/:name/restore`, `DELETE .../snapshots/:name` |
+| Lifecycle | `POST /api/launch/:profile_id`, `POST /api/kill/:profile_id`, `POST /api/register-external`, `GET /api/running` |
+| Settings | `GET/PUT /api/settings`, `GET/PUT /api/browser-source`, `GET/PUT /api/local-api` |
+| WebSocket | `GET /api/ws` |
+| Health | `GET /api/health` |
+
+### Internal
+
+- Deleted `src-tauri/src/recording/` directory
+- Deleted `src-tauri/src/api/browser.rs`, `src-tauri/src/api/action_log.rs`
+- Deleted `src-tauri/src/agent/cdp.rs`, `src-tauri/src/agent/session.rs`
+- Simplified `AppState` — removed SessionManager, RecordingManager, ActionLog fields
+- Fixed `is_running()` in ProcessManager to use `ProcessesToUpdate::All` for reliable process detection
+- Added grace period for newly launched processes in `cleanup_dead_processes()`
+
+---
+
 ## [0.10.0] - 2026-03-02
 
 ### New Features

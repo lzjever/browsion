@@ -6,7 +6,6 @@ pub mod cft;
 pub mod error;
 pub mod platform;
 pub mod process;
-pub mod recording;
 pub mod state;
 pub mod tray;
 pub mod window;
@@ -50,9 +49,8 @@ pub fn run() {
                         tracing::error!("API server error: {}", e);
                     }
                 });
-                if let Ok(mut guard) = state.api_server_abort.lock() {
-                    *guard = Some(Box::new(move || handle.abort()));
-                }
+                let mut guard = state.api_server_abort.lock();
+                *guard = Some(Box::new(move || handle.abort()));
             }
 
             // Session reconnect: probe previously-running browsers from saved sessions
@@ -103,7 +101,7 @@ pub fn run() {
             // Setup system tray
             tray::setup_tray(app.handle())?;
 
-            // Background task: cleanup dead processes + stale CDP sessions every 30s
+            // Background task: cleanup dead processes every 30s
             let app_handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(30));
@@ -113,9 +111,6 @@ pub fn run() {
                         match state.process_manager.cleanup_dead_processes().await {
                             Ok(removed) if !removed.is_empty() => {
                                 tracing::info!("Auto-cleaned dead processes: {:?}", removed);
-                                for profile_id in &removed {
-                                    state.session_manager.disconnect(profile_id).await;
-                                }
                                 state.emit("browser-status-changed");
                             }
                             Ok(_) => {}
@@ -170,16 +165,6 @@ pub fn run() {
             commands::snapshots::create_snapshot,
             commands::snapshots::restore_snapshot,
             commands::snapshots::delete_snapshot,
-            commands::recording::list_recordings,
-            commands::recording::get_recording,
-            commands::recording::save_recording,
-            commands::recording::delete_recording,
-            commands::recording::play_recording,
-            commands::recording::start_recording,
-            commands::recording::stop_recording,
-            commands::recording::get_active_recording_sessions,
-            commands::recording::is_recording,
-            commands::recording::get_recording_session_info,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -1,6 +1,14 @@
 import { invoke } from '@tauri-apps/api/core';
-import type { BrowserProfile, AppSettings, RunningStatus, LocalApiConfig, ProxyPreset, SnapshotInfo, Recording, RecordingSessionInfo } from '../types/profile';
-import type { BrowserSource, CftVersionInfo } from '../types/profile';
+import type {
+  BrowserProfile,
+  BrowserSource,
+  CftVersionInfo,
+  AppSettings,
+  LocalApiConfig,
+  RunningStatus,
+  ProxyPreset,
+  SnapshotInfo,
+} from '../types/profile';
 
 export const tauriApi = {
   // Profile management
@@ -61,7 +69,7 @@ export const tauriApi = {
   async downloadCftVersion(
     channel: string,
     version: string,
-    downloadDir?: string
+    downloadDir?: string,
   ): Promise<string> {
     return invoke('download_cft_version', {
       channel,
@@ -123,52 +131,5 @@ export const tauriApi = {
 
   async deleteSnapshot(profileId: string, name: string): Promise<void> {
     return invoke('delete_snapshot', { profileId, name });
-  },
-
-  // Recordings
-  async listRecordings(): Promise<Recording[]> {
-    return invoke('list_recordings');
-  },
-
-  async getRecording(id: string): Promise<Recording> {
-    return invoke('get_recording', { id });
-  },
-
-  async saveRecording(recording: Recording): Promise<Recording> {
-    return invoke('save_recording', { recording });
-  },
-
-  async deleteRecording(id: string): Promise<void> {
-    return invoke('delete_recording', { id });
-  },
-
-  async playRecording(recordingId: string, profileId: string): Promise<{
-    recording_id: string;
-    profile_id: string;
-    completed_actions: number;
-    total_actions: number;
-  }> {
-    return invoke('play_recording', { recordingId, profileId });
-  },
-
-  // Real-time recording
-  async startRecording(profileId: string): Promise<string> {
-    return invoke('start_recording', { profileId });
-  },
-
-  async stopRecording(profileId: string, name: string, description: string): Promise<Recording> {
-    return invoke('stop_recording', { profileId, name, description });
-  },
-
-  async getActiveRecordingSessions(): Promise<Record<string, string>> {
-    return invoke('get_active_recording_sessions');
-  },
-
-  async isRecording(profileId: string): Promise<boolean> {
-    return invoke('is_recording', { profileId });
-  },
-
-  async getRecordingSessionInfo(profileId: string): Promise<RecordingSessionInfo | null> {
-    return invoke('get_recording_session_info', { profileId });
   },
 };

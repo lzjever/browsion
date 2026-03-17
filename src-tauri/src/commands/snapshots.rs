@@ -3,7 +3,6 @@
 //! Snapshots are stored under ~/.browsion/snapshots/<profile_id>/<name>/
 //! with a manifest file at ~/.browsion/snapshots/<profile_id>/manifest.json
 
-use crate::agent::SessionManager;
 use crate::config::schema::{AppConfig, SnapshotInfo};
 use crate::process::ProcessManager;
 use crate::state::AppState;
@@ -175,7 +174,6 @@ pub async fn core_restore_snapshot(
     name: &str,
     config: &AppConfig,
     process_mgr: &ProcessManager,
-    session_mgr: &SessionManager,
 ) -> Result<(), String> {
     if process_mgr.is_running(profile_id) {
         return Err(format!(
@@ -194,9 +192,6 @@ pub async fn core_restore_snapshot(
     if !snap_dir.exists() {
         return Err(format!("Snapshot '{}' not found for profile {}", name, profile_id));
     }
-
-    // Disconnect any open CDP session
-    session_mgr.disconnect(profile_id).await;
 
     let dst = profile.user_data_dir.clone();
 
@@ -260,14 +255,7 @@ pub async fn restore_snapshot(
     state: State<'_, Arc<AppState>>,
 ) -> Result<(), String> {
     let config = state.config.read().clone();
-    core_restore_snapshot(
-        &profile_id,
-        &name,
-        &config,
-        &state.process_manager,
-        &state.session_manager,
-    )
-    .await
+    core_restore_snapshot(&profile_id, &name, &config, &state.process_manager).await
 }
 
 #[tauri::command]

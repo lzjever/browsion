@@ -14,11 +14,7 @@ npm run test:watch       # vitest watch
 
 # Rust backend (use scripts/cargo in Cursor due to ARGV0 issue)
 cd src-tauri && cargo check --lib           # Fast compile check
-cd src-tauri && cargo test --lib            # Unit tests (27 tests)
-cd src-tauri && cargo test --test e2e_browser_test -- --test-threads=1  # E2E browser tests (20 tests)
-
-# Build MCP binary
-cd src-tauri && cargo build --release --bin browsion-mcp
+cd src-tauri && cargo test --lib            # Unit tests (26 tests)
 
 # Production build
 npm run tauri build
@@ -28,91 +24,60 @@ npm run tauri build
 
 ## Architecture Overview
 
-**Stack**: Tauri 2 (Rust backend + React/TypeScript frontend) + Chrome DevTools Protocol via raw WebSocket (NOT Playwright)
+**Stack**: Tauri 2 (Rust backend + React/TypeScript frontend)
 
-### Three Components
+**Browsion is a Browser Profile Manager + CDP Port Exposer**
+
+### Two Components
 1. **Tauri App** (`src-tauri/src/`) — Desktop app with system tray, profile management, HTTP API server
-2. **MCP Server** (`src-tauri/src/bin/browsion-mcp.rs`) — Standalone binary exposing 73 tools for AI agents via stdio
-3. **Frontend** (`src/`) — React UI for profile/workflow/recording management
+2. **Frontend** (`src/`) — React UI for profile management and settings
 
 ### Key Backend Modules (`src-tauri/src/`)
 
 | Module | Purpose |
 |--------|---------|
-| `agent/cdp.rs` | CDPClient — browser-level WebSocket, flatten mode, all browser control |
-| `agent/session.rs` | SessionManager — per-profile CDP connection pool |
-| `agent/types.rs` | Data types: DOMElement, AXNode, PageState, TabInfo, InterceptRule |
-| `api/mod.rs` | HTTP API router (70+ endpoints) with action log middleware |
-| `api/browser.rs` | Browser control HTTP handlers |
+| `api/mod.rs` | HTTP API router (20 endpoints) |
+| `api/lifecycle.rs` | Browser launch/kill handlers, returns CDP port |
+| `api/ws.rs` | WebSocket for real-time browser status events |
 | `config/schema.rs` | BrowserProfile, AppConfig, ProxyPreset, SnapshotInfo |
 | `process/launcher.rs` | Chrome launch with flags, proxy, timezone, fingerprint |
 | `process/manager.rs` | Process tracking, CDP port allocation, cleanup |
-| `workflow/executor.rs` | Workflow step execution engine |
-| `recording/session.rs` | Browser-level event recording (clicks, navigation, etc.) |
-| `state.rs` | AppState — shared state with config, process_manager, session_manager |
+| `state.rs` | AppState — shared state with config, process_manager |
 
-### CDP Flatten Mode Architecture
+### HTTP API (20 endpoints)
 
-CDPClient uses a **single browser-level WebSocket** (via `/json/version` endpoint) for all tabs:
-
-- **Tab registry**: `tab_registry: HashMap<target_id, TabState>` tracks per-tab session_id, URL, AX cache
-- **Response routing**: `(session_id, msg_id) → oneshot::Sender` for command responses
-- **Event routing**: `(session_id, method) → Vec<oneshot::Sender>` for event subscribers
-- **Per-tab state**: Each tab has its own `ax_ref_cache` and `inflight_requests` counter
-- **Tab switch**: `switch_tab()` saves/restores per-tab state to/from `tab_registry`
-
-**Important patterns**:
-- Subscribe to events BEFORE triggering actions (avoid race conditions)
-- Use `send_browser_command()` for Target.* domain, `send_command()` for tab-level commands
-- AX ref cache is cleared on navigation; `click_ref`/`type_ref` resolve via `DOM.resolveNode(backendNodeId)`
-
-### HTTP API Flow
-
-```
-MCP Client → browsion-mcp binary → HTTP API (port 38472) → SessionManager → CDPClient → Chrome
-```
-
-API key auth via `X-API-Key` header (optional, from `BROWSION_API_KEY` env).
+| Category | Endpoints |
+|----------|-----------|
+| Profiles | `GET/POST/PUT/DELETE /api/profiles`, `GET/POST /api/profiles/:id/snapshots`, `POST .../snapshots/:name/restore`, `DELETE .../snapshots/:name` |
+| Lifecycle | `POST /api/launch/:profile_id` (returns `{"pid": 123, "cdp_port": 9222}`), `POST /api/kill/:profile_id`, `POST /api/register-external`, `GET /api/running` |
+| Settings | `GET/PUT /api/settings`, `GET/PUT /api/browser-source`, `GET/PUT /api/local-api` |
+| WebSocket | `GET /api/ws` — real-time `browser-status-changed`, `profiles-changed` events |
+| Health | `GET /api/health` |
 
 ### Frontend Structure (`src/`)
 
-- `components/ProfileList.tsx` — Main profile list with CRUD, launch/kill
-- `components/WorkflowEditor.tsx` — Visual workflow builder
-- `components/RecordingPlayer.tsx` — Recording playback UI
-- `components/MonitorPage.tsx` — Live screenshots, action log, cookie export
+- `components/ProfileList.tsx` — Main profile list with CRUD, launch/kill, real-time status
+- `components/ProfileForm.tsx` — Profile edit dialog with proxy presets dropdown
+- `components/Settings.tsx` — Browser source, proxy presets, local API configuration
 - `api/tauri.ts` — Tauri command wrappers
 - `types/profile.ts` — TypeScript types matching Rust schema
 
+## Using Browsion
+
+1. Create a profile with a user data directory
+2. Launch the profile — Browsion starts Chrome with `--remote-debugging-port=XXXX`
+3. Connect to Chrome via CDP at `http://127.0.0.1:XXXX` (returned by launch API)
+4. Use any CDP client (Puppeteer, Playwright, custom WebSocket) to control the browser
+5. Kill the browser when done
+
+## Browser Status Tracking
+
+The `ProcessManager.is_running()` function uses:
+- **5-second grace period** for newly launched processes (avoids sysinfo timing issues)
+- **Full process refresh** (`ProcessesToUpdate::All`) to ensure newly launched processes are visible
+- **Process verification** — checks PID exists, process name contains "chrome", and not a zombie
+
 ## Testing
 
-### E2E Browser Tests (`src-tauri/tests/e2e_browser_test.rs`)
-- Launches real Chrome in headless mode
-- Uses in-process axum server for test HTML pages
-- Requires `#[tokio::test(flavor = "multi_thread", worker_threads = 2)]` — WS reader needs separate thread
-- Chrome flags: `--headless=new --disable-gpu --disable-dev-shm-usage`
-- Tests skip (not fail) if Chrome binary not found
-
-### Known CDP Limitations
-- AX-Ref (`click_ref`/`type_ref`/`focus_ref`) may not work on `data:` URLs — CDP `DOM.pushNodesByBackendIdsToFrontend` has limitations
-- Storage tools blocked by browser security on `data:` URLs
-
-## Recommended AI Agent Workflow
-
-```
-1. list_profiles      → find profile id
-2. launch_browser     → start Chrome
-3. navigate           → go to URL (waits for load)
-4. get_page_state     → URL + title + AX tree with ref_ids
-5. click_ref/type_ref → interact via semantic refs (preferred over CSS selectors)
-6. screenshot         → visual verification
-7. kill_browser       → cleanup
-```
-
-## New Tab Workflow (target="_blank" links)
-
-```
-1. wait_for_new_tab(timeout_ms=5000)   ← call BEFORE the click
-2. click_ref("e5")                     ← click the link
-3. switch_tab(target_id=<from step 1>) ← switch to new tab
-4. get_page_state()                    ← observe new tab
-```
+- Unit tests: `cargo test --lib` (26 tests)
+- Tests cover config validation, process management, proxy presets, launcher args

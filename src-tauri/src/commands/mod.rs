@@ -1,8 +1,6 @@
 pub mod proxy;
-pub mod recording;
 pub mod snapshots;
 pub use proxy::{add_proxy_preset, delete_proxy_preset, get_proxy_presets, test_proxy, update_proxy_preset};
-pub use recording::{delete_recording, get_recording, list_recordings, save_recording};
 pub use snapshots::{create_snapshot, delete_snapshot, list_snapshots, restore_snapshot};
 
 use crate::config::schema::BrowserSource;
@@ -351,7 +349,7 @@ pub async fn update_mcp_config(
 
     // Stop the existing server
     {
-        let mut guard = state.api_server_abort.lock().unwrap_or_else(|e| e.into_inner());
+        let mut guard = state.api_server_abort.lock();
         if let Some(abort_fn) = guard.take() {
             abort_fn();
             tracing::info!("Stopped API server for reconfiguration");
@@ -371,7 +369,7 @@ pub async fn update_mcp_config(
                 tracing::error!("API server error after restart: {}", e);
             }
         });
-        let mut guard = state.api_server_abort.lock().unwrap_or_else(|e| e.into_inner());
+        let mut guard = state.api_server_abort.lock();
         *guard = Some(Box::new(move || handle.abort()));
         tracing::info!("Restarted API server on port {}", mcp.api_port);
     }
@@ -396,7 +394,7 @@ pub async fn get_recent_profiles(
     let recent_ids = state.process_manager.get_recent_launches();
     let config = state.config.read();
 
-    let mut recent_profiles = Vec::new();
+    let mut recent_profiles: Vec<BrowserProfile> = Vec::new();
     for profile_id in recent_ids {
         if let Some(profile) = config.profiles.iter().find(|p| p.id == profile_id) {
             recent_profiles.push(profile.clone());

@@ -1,33 +1,17 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { ProfileList } from './components/ProfileList';
 import { ProfileForm } from './components/ProfileForm';
 import { Settings } from './components/Settings';
-import { RecordingList } from './components/RecordingList';
 import type { BrowserProfile } from './types/profile';
 import './styles/index.css';
 
-type View = 'profiles' | 'settings' | 'recordings';
+type View = 'profiles' | 'settings';
 
 function App() {
   const [currentView, setCurrentView] = useState<View>('profiles');
   const [showProfileForm, setShowProfileForm] = useState(false);
   const [editingProfile, setEditingProfile] = useState<BrowserProfile | undefined>();
   const [refreshKey, setRefreshKey] = useState(0);
-  const [profiles, setProfiles] = useState<BrowserProfile[]>([]);
-
-  // Load profiles on mount
-  useEffect(() => {
-    const loadProfiles = async () => {
-      try {
-        const { tauriApi } = await import('./api/tauri');
-        const profileList = await tauriApi.getProfiles();
-        setProfiles(profileList);
-      } catch (e) {
-        console.error('Failed to load profiles:', e);
-      }
-    };
-    loadProfiles();
-  }, []);
 
   const handleAddProfile = () => {
     setEditingProfile(undefined);
@@ -78,12 +62,6 @@ function App() {
           >
             Settings
           </button>
-          <button
-            className={`nav-btn ${currentView === 'recordings' ? 'active' : ''}`}
-            onClick={() => setCurrentView('recordings')}
-          >
-            Recordings
-          </button>
         </nav>
       </header>
 
@@ -105,8 +83,6 @@ function App() {
         )}
 
         {currentView === 'settings' && <Settings />}
-
-        {currentView === 'recordings' && <RecordingList profiles={profiles} />}
       </main>
 
       {showProfileForm && (

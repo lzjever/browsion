@@ -155,11 +155,23 @@ impl ProcessManager {
     pub fn is_running(&self, profile_id: &str) -> bool {
         let processes = self.active_processes.lock();
         if let Some(info) = processes.get(profile_id) {
+            // For recently launched processes (within 5 seconds), trust the entry
+            // This avoids sysinfo cache timing issues where newly launched processes
+            // aren't visible yet
+            let now = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_secs();
+            if now.saturating_sub(info.launched_at) < 5 {
+                return true;
+            }
+
             // Verify the process actually exists and is a Chrome process
             let pid = Pid::from_u32(info.pid);
             let mut system = self.system.lock();
+            // Refresh all processes to ensure we find newly launched ones
             system.refresh_processes_specifics(
-                sysinfo::ProcessesToUpdate::Some(&[pid]),
+                sysinfo::ProcessesToUpdate::All,
                 ProcessRefreshKind::new(),
             );
 
@@ -194,12 +206,25 @@ impl ProcessManager {
             let processes = self.active_processes.lock();
             let mut system = self.system.lock();
 
+            // Refresh all processes once at the start
+            system.refresh_processes_specifics(
+                sysinfo::ProcessesToUpdate::All,
+                ProcessRefreshKind::new(),
+            );
+
+            // Get current time for grace period check
+            let now = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_secs();
+
             for (profile_id, info) in processes.iter() {
+                // Skip recently launched processes (within 5 seconds grace period)
+                if now.saturating_sub(info.launched_at) < 5 {
+                    continue;
+                }
+
                 let pid = Pid::from_u32(info.pid);
-                system.refresh_processes_specifics(
-                    sysinfo::ProcessesToUpdate::Some(&[pid]),
-                    ProcessRefreshKind::new(),
-                );
 
                 let should_remove = if let Some(process) = system.process(pid) {
                     let name = process.name().to_string_lossy().to_lowercase();

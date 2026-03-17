@@ -543,88 +543,6 @@ export const Settings: React.FC = () => {
         </div>
 
         <div className="settings-section">
-          <h3>Local API</h3>
-          <p className="settings-hint">
-            Use curl or agents to control profile, browser, recording, and playback through the local HTTP API.
-          </p>
-
-          <div className="form-group checkbox-group">
-            <label>
-              <input
-                type="checkbox"
-                checked={localApi.enabled}
-                onChange={(e) => setLocalApi((prev) => ({ ...prev, enabled: e.target.checked }))}
-              />
-              <span>Enable local HTTP API</span>
-            </label>
-          </div>
-
-          <div className="form-group">
-            <label>API port</label>
-            <input
-              type="number"
-              min="1"
-              max="65535"
-              value={localApi.api_port}
-              onChange={(e) =>
-                setLocalApi((prev) => ({ ...prev, api_port: Number(e.target.value) || 0 }))
-              }
-            />
-          </div>
-
-          <div className="form-group">
-            <label>API key</label>
-            <input
-              type="text"
-              value={localApi.api_key ?? ''}
-              onChange={(e) => setLocalApi((prev) => ({ ...prev, api_key: e.target.value }))}
-              placeholder="Optional"
-            />
-          </div>
-
-          <div className="form-group">
-            <label>Status</label>
-            <div className={`effective-path-source ${localApiStatus}`}>
-              {localApi.enabled
-                ? localApiStatus === 'online'
-                  ? `Listening on 127.0.0.1:${localApi.api_port}`
-                  : 'Configured but not reachable'
-                : 'Disabled'}
-            </div>
-          </div>
-
-          <div className="button-row">
-            <button className="btn btn-primary" onClick={handleSaveLocalApi} disabled={saving}>
-              {saving ? 'Saving…' : 'Save Local API'}
-            </button>
-            <button
-              className="btn btn-secondary"
-              onClick={() => checkLocalApiHealth(localApi.api_port)}
-              disabled={!localApi.enabled}
-            >
-              Check health
-            </button>
-          </div>
-
-          <div className="form-group">
-            <label>Curl examples</label>
-            <textarea
-              readOnly
-              className="readonly"
-              rows={10}
-              value={[
-                `curl http://127.0.0.1:${localApi.api_port}/api/health`,
-                `curl${curlHeaderExample} http://127.0.0.1:${localApi.api_port}/api/profiles`,
-                `curl${curlHeaderExample} -X POST http://127.0.0.1:${localApi.api_port}/api/launch/<profile_id>`,
-                `curl${curlHeaderExample} -X POST http://127.0.0.1:${localApi.api_port}/api/browser/<profile_id>/navigate -H "Content-Type: application/json" -d '{"url":"https://google.com"}'`,
-                `curl${curlHeaderExample} -X POST http://127.0.0.1:${localApi.api_port}/api/recordings/start/<profile_id>`,
-                `curl${curlHeaderExample} -X POST http://127.0.0.1:${localApi.api_port}/api/recordings/<recording_id>/play/<profile_id>`,
-              ].join('\n')}
-            />
-          </div>
-        </div>
-
-        <div className="settings-section">
           <h3>Proxy Presets</h3>
           <p className="settings-hint">Save proxy URLs for quick reuse in profiles.</p>
 
@@ -695,6 +613,87 @@ export const Settings: React.FC = () => {
             >
               Add
             </button>
+          </div>
+        </div>
+
+        <div className="settings-section">
+          <h3>Local API</h3>
+          <p className="settings-hint">
+            Use curl or agents to control profiles through the local HTTP API.
+          </p>
+
+          <div className="form-group checkbox-group">
+            <label>
+              <input
+                type="checkbox"
+                checked={localApi.enabled}
+                onChange={(e) => setLocalApi((prev) => ({ ...prev, enabled: e.target.checked }))}
+              />
+              <span>Enable local HTTP API</span>
+            </label>
+          </div>
+
+          <div className="form-group">
+            <label>API port</label>
+            <input
+              type="number"
+              min="1"
+              max="65535"
+              value={localApi.api_port}
+              onChange={(e) =>
+                setLocalApi((prev) => ({ ...prev, api_port: Number(e.target.value) || 0 }))
+              }
+            />
+          </div>
+
+          <div className="form-group">
+            <label>API key</label>
+            <input
+              type="text"
+              value={localApi.api_key ?? ''}
+              onChange={(e) => setLocalApi((prev) => ({ ...prev, api_key: e.target.value }))}
+              placeholder="Optional"
+            />
+          </div>
+
+          <div className="form-group">
+            <label>Status</label>
+            <div className={`effective-path-source ${localApiStatus}`}>
+              {localApi.enabled
+                ? localApiStatus === 'online'
+                  ? `Listening on 127.0.0.1:${localApi.api_port}`
+                  : 'Configured but not reachable'
+                : 'Disabled'}
+            </div>
+          </div>
+
+          <div className="button-row">
+            <button className="btn btn-primary" onClick={handleSaveLocalApi} disabled={saving}>
+              {saving ? 'Saving…' : 'Save Local API'}
+            </button>
+            <button
+              className="btn btn-secondary"
+              onClick={() => checkLocalApiHealth(localApi.api_port)}
+              disabled={!localApi.enabled}
+            >
+              Check health
+            </button>
+          </div>
+
+          <div className="form-group">
+            <label>Curl examples</label>
+            <textarea
+              readOnly
+              className="readonly"
+              rows={8}
+              value={[
+                `curl http://127.0.0.1:${localApi.api_port}/api/health`,
+                `curl${curlHeaderExample} http://127.0.0.1:${localApi.api_port}/api/profiles`,
+                `curl${curlHeaderExample} -X POST http://127.0.0.1:${localApi.api_port}/api/launch/<profile_id>`,
+                `curl${curlHeaderExample} -X POST http://127.0.0.1:${localApi.api_port}/api/kill/<profile_id>`,
+                `curl${curlHeaderExample} http://127.0.0.1:${localApi.api_port}/api/running`,
+              ].join('\n')}
+            />
           </div>
         </div>
       </div>

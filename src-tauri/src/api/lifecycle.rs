@@ -23,14 +23,14 @@ pub struct LaunchResponse {
 }
 
 #[derive(serde::Serialize)]
-struct RunningBrowser {
+pub struct RunningBrowser {
     profile_id: String,
     pid: u32,
     cdp_port: Option<u16>,
     launched_at: u64,
 }
 
-async fn launch_profile(
+pub async fn launch_profile(
     State(state): State<ApiState>,
     AxumPath(profile_id): AxumPath<String>,
 ) -> ApiResult<Json<LaunchResponse>> {
@@ -76,11 +76,10 @@ async fn launch_profile(
     Ok(Json(LaunchResponse { pid, cdp_port }))
 }
 
-async fn kill_profile(
+pub async fn kill_profile(
     State(state): State<ApiState>,
     AxumPath(profile_id): AxumPath<String>,
 ) -> ApiResult<StatusCode> {
-    state.session_manager.disconnect(&profile_id).await;
     state
         .process_manager
         .kill_profile(&profile_id)
@@ -97,7 +96,7 @@ async fn kill_profile(
     Ok(StatusCode::NO_CONTENT)
 }
 
-async fn get_running_browsers(State(state): State<ApiState>) -> Json<Vec<RunningBrowser>> {
+pub async fn get_running_browsers(State(state): State<ApiState>) -> Json<Vec<RunningBrowser>> {
     let ids = state.process_manager.get_running_profiles();
     let browsers: Vec<RunningBrowser> = ids
         .iter()

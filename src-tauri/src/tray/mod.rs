@@ -168,7 +168,7 @@ fn handle_profile_click<R: Runtime>(app: &AppHandle<R>, profile_id: &str) {
         } else {
             // Launch new instance
             let config = state.config.read().clone();
-            let process_manager = state.process_manager.clone();
+            let state_clone = Arc::clone(&*state);
             let profile_id = profile_id.to_string();
 
             tauri::async_runtime::spawn(async move {
@@ -179,7 +179,7 @@ fn handle_profile_click<R: Runtime>(app: &AppHandle<R>, profile_id: &str) {
                         return;
                     }
                 };
-                if let Err(e) = process_manager.launch_profile(&profile_id, &config, &chrome_path).await {
+                if let Err(e) = state_clone.process_manager.launch_profile(&profile_id, &config, &chrome_path).await {
                     tracing::error!("Failed to launch profile {}: {}", profile_id, e);
                 }
             });
