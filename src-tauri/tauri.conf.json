@@ -1,6 +1,6 @@
 {
   "productName": "Browsion",
-  "version": "0.11.0",
+  "version": "0.11.1",
   "identifier": "com.browsion.app",
   "build": {
     "beforeDevCommand": "npm run dev",
