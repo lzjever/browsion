@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useCallback } from 'react';
 import { ProfileList } from './components/ProfileList';
 import { ProfileForm } from './components/ProfileForm';
 import { Settings } from './components/Settings';
@@ -13,18 +13,17 @@ function App() {
   const [editingProfile, setEditingProfile] = useState<BrowserProfile | undefined>();
   const [refreshKey, setRefreshKey] = useState(0);
 
-  const handleAddProfile = () => {
+  const handleAddProfile = useCallback(() => {
     setEditingProfile(undefined);
     setShowProfileForm(true);
-  };
+  }, []);
 
-  const handleEditProfile = (profile: BrowserProfile) => {
+  const handleEditProfile = useCallback((profile: BrowserProfile) => {
     setEditingProfile(profile);
     setShowProfileForm(true);
-  };
+  }, []);
 
-  const handleCloneProfile = (profile: BrowserProfile) => {
-    // Create a clone with new ID and modified name
+  const handleCloneProfile = useCallback((profile: BrowserProfile) => {
     const clonedProfile: BrowserProfile = {
       ...profile,
       id: '', // Will be generated in ProfileForm
@@ -32,18 +31,18 @@ function App() {
     };
     setEditingProfile(clonedProfile);
     setShowProfileForm(true);
-  };
+  }, []);
 
-  const handleSaveProfile = () => {
+  const handleSaveProfile = useCallback(() => {
     setShowProfileForm(false);
     setEditingProfile(undefined);
     setRefreshKey((prev) => prev + 1);
-  };
+  }, []);
 
-  const handleCancelProfile = () => {
+  const handleCancelProfile = useCallback(() => {
     setShowProfileForm(false);
     setEditingProfile(undefined);
-  };
+  }, []);
 
   return (
     <div className="app">

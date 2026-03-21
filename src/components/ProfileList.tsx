@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import { ProfileItem } from './ProfileItem';
 import { tauriApi } from '../api/tauri';
@@ -29,7 +29,7 @@ export const ProfileList: React.FC<ProfileListProps> = ({ onEditProfile, onClone
     confirmClassName: string;
   } | null>(null);
 
-  const loadProfiles = async () => {
+  const loadProfiles = useCallback(async () => {
     try {
       setLoading(true);
       const [profilesData, statusData] = await Promise.all([
@@ -45,14 +45,27 @@ export const ProfileList: React.FC<ProfileListProps> = ({ onEditProfile, onClone
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
+
+  const refreshProfilesSilent = useCallback(async () => {
+    try {
+      const [profilesData, statusData] = await Promise.all([
+        tauriApi.getProfiles(),
+        tauriApi.getRunningProfiles(),
+      ]);
+      setProfiles(profilesData);
+      setRunningStatus(statusData);
+    } catch (err) {
+      console.error('Failed to refresh profiles:', err);
+    }
+  }, []);
 
   useEffect(() => {
     loadProfiles();
 
     // Listen for real-time events from backend (local API or tray actions)
     const unlistenProfiles = listen('profiles-changed', () => {
-      loadProfiles();
+      refreshProfilesSilent();
     });
     const unlistenStatus = listen('browser-status-changed', async () => {
       try {
@@ -86,9 +99,9 @@ export const ProfileList: React.FC<ProfileListProps> = ({ onEditProfile, onClone
 
   useEffect(() => {
     if (refreshTrigger > 0) {
-      loadProfiles();
+      refreshProfilesSilent();
     }
-  }, [refreshTrigger]);
+  }, [refreshTrigger, refreshProfilesSilent]);
 
   const handleLaunch = useCallback(async (id: string) => {
     setLaunchingId(id);
@@ -144,14 +157,14 @@ export const ProfileList: React.FC<ProfileListProps> = ({ onEditProfile, onClone
         setConfirmState(null);
         try {
           await tauriApi.deleteProfile(id);
-          await loadProfiles();
+          await refreshProfilesSilent();
           showToast('Profile deleted', 'success');
         } catch (err) {
           showToast(`Failed to delete: ${err}`, 'error');
         }
       },
     });
-  }, [showToast]);
+  }, [showToast, refreshProfilesSilent]);
 
   if (loading) {
     return <div className="loading">Loading profiles...</div>;
@@ -170,14 +183,16 @@ export const ProfileList: React.FC<ProfileListProps> = ({ onEditProfile, onClone
   }
 
   // Filter profiles by name or tags
-  const filteredProfiles = profiles.filter((profile) => {
-    if (!tagFilter.trim()) return true;
+  const filteredProfiles = useMemo(() => {
+    if (!tagFilter.trim()) return profiles;
     const keywords = tagFilter.trim().toLowerCase().split(/\s+/);
-    return keywords.some((kw) =>
-      profile.name.toLowerCase().includes(kw) ||
-      (profile.tags || []).some((tag) => tag.toLowerCase().includes(kw))
+    return profiles.filter((profile) =>
+      keywords.some((kw) =>
+        profile.name.toLowerCase().includes(kw) ||
+        (profile.tags || []).some((tag) => tag.toLowerCase().includes(kw))
+      )
     );
-  });
+  }, [profiles, tagFilter]);
 
   return (
     <>
