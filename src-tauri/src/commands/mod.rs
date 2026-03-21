@@ -132,10 +132,13 @@ pub async fn get_running_profiles(
     let config = state.config.read();
     let mut status = HashMap::new();
 
+    // Refresh system processes ONCE for all profiles
+    state.process_manager.refresh_system_processes();
+
     for profile in &config.profiles {
         status.insert(
             profile.id.clone(),
-            state.process_manager.is_running(&profile.id),
+            state.process_manager.is_running_cached(&profile.id),
         );
     }
 

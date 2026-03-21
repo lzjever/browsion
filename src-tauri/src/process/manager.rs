@@ -151,6 +151,44 @@ impl ProcessManager {
         }
     }
 
+    /// Refresh system process list once. Use before batch `is_running_cached` calls.
+    pub fn refresh_system_processes(&self) {
+        let mut system = self.system.lock();
+        system.refresh_processes_specifics(
+            sysinfo::ProcessesToUpdate::All,
+            ProcessRefreshKind::new(),
+        );
+    }
+
+    /// Check if a profile is currently running (no refresh — uses cached system data).
+    /// Call `refresh_system_processes()` first if you need fresh data.
+    pub fn is_running_cached(&self, profile_id: &str) -> bool {
+        let processes = self.active_processes.lock();
+        if let Some(info) = processes.get(profile_id) {
+            // For recently launched processes (within 5 seconds), trust the entry
+            let now = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_secs();
+            if now.saturating_sub(info.launched_at) < 5 {
+                return true;
+            }
+
+            let pid = Pid::from_u32(info.pid);
+            let system = self.system.lock();
+            if let Some(process) = system.process(pid) {
+                let name = process.name().to_string_lossy().to_lowercase();
+                let is_chrome = name.contains("chrome") || name.contains("chromium");
+                let is_zombie = process.status() == sysinfo::ProcessStatus::Zombie;
+                is_chrome && !is_zombie
+            } else {
+                false
+            }
+        } else {
+            false
+        }
+    }
+
     /// Check if a profile is currently running
     pub fn is_running(&self, profile_id: &str) -> bool {
         let processes = self.active_processes.lock();

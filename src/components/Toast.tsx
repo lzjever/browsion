@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useCallback } from 'react';
+import React, { createContext, useContext, useState, useCallback, useMemo } from 'react';
 import { UI_CONSTANTS } from './constants';
 
 export type ToastType = 'success' | 'error' | 'info' | 'warning';
@@ -30,8 +30,10 @@ export const ToastProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }, UI_CONSTANTS.TOAST_DURATION_MS);
   }, []);
 
+  const contextValue = useMemo(() => ({ showToast }), [showToast]);
+
   return (
-    <ToastContext.Provider value={{ showToast }}>
+    <ToastContext.Provider value={contextValue}>
       {children}
       <div className="toast-container">
         {toasts.map(toast => (

@@ -13,17 +13,7 @@ interface ProfileItemProps {
   onDelete: (id: string) => void;
 }
 
-export const ProfileItem: React.FC<ProfileItemProps> = ({
-  profile,
-  isRunning,
-  isLaunching = false,
-  onLaunch,
-  onActivate,
-  onKill,
-  onEdit,
-  onClone,
-  onDelete,
-}) => {
+export const ProfileItem = React.memo<ProfileItemProps>(({ profile, isRunning, isLaunching = false, onLaunch, onActivate, onKill, onEdit, onClone, onDelete }) => {
   return (
     <div className="profile-item">
       <div className="profile-header">
@@ -107,4 +97,4 @@ export const ProfileItem: React.FC<ProfileItemProps> = ({
       )}
     </div>
   );
-};
+});

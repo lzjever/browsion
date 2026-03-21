@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import { ProfileItem } from './ProfileItem';
 import { tauriApi } from '../api/tauri';
@@ -57,7 +57,9 @@ export const ProfileList: React.FC<ProfileListProps> = ({ onEditProfile, onClone
     const unlistenStatus = listen('browser-status-changed', async () => {
       try {
         const status = await tauriApi.getRunningProfiles();
-        setRunningStatus(status);
+        setRunningStatus(prev =>
+          JSON.stringify(prev) === JSON.stringify(status) ? prev : status
+        );
       } catch (err) {
         console.error('Failed to refresh status:', err);
       }
@@ -67,7 +69,9 @@ export const ProfileList: React.FC<ProfileListProps> = ({ onEditProfile, onClone
     const interval = setInterval(async () => {
       try {
         const status = await tauriApi.getRunningProfiles();
-        setRunningStatus(status);
+        setRunningStatus(prev =>
+          JSON.stringify(prev) === JSON.stringify(status) ? prev : status
+        );
       } catch (err) {
         console.error('Failed to refresh status:', err);
       }
@@ -86,29 +90,31 @@ export const ProfileList: React.FC<ProfileListProps> = ({ onEditProfile, onClone
     }
   }, [refreshTrigger]);
 
-  const handleLaunch = async (id: string) => {
+  const handleLaunch = useCallback(async (id: string) => {
     setLaunchingId(id);
     try {
       await tauriApi.launchProfile(id);
       const status = await tauriApi.getRunningProfiles();
-      setRunningStatus(status);
+      setRunningStatus(prev =>
+        JSON.stringify(prev) === JSON.stringify(status) ? prev : status
+      );
       showToast('Browser launched', 'success');
     } catch (err) {
       showToast(`Failed to launch: ${err}`, 'error');
     } finally {
       setLaunchingId(null);
     }
-  };
+  }, [showToast]);
 
-  const handleActivate = async (id: string) => {
+  const handleActivate = useCallback(async (id: string) => {
     try {
       await tauriApi.activateProfile(id);
     } catch (err) {
       showToast(`Failed to activate: ${err}`, 'error');
     }
-  };
+  }, [showToast]);
 
-  const handleKill = (id: string) => {
+  const handleKill = useCallback((id: string) => {
     setConfirmState({
       message: 'Kill this browser? Any unsaved data will be lost.',
       confirmLabel: 'Kill',
@@ -118,16 +124,18 @@ export const ProfileList: React.FC<ProfileListProps> = ({ onEditProfile, onClone
         try {
           await tauriApi.killProfile(id);
           const status = await tauriApi.getRunningProfiles();
-          setRunningStatus(status);
+          setRunningStatus(prev =>
+            JSON.stringify(prev) === JSON.stringify(status) ? prev : status
+          );
           showToast('Browser stopped', 'success');
         } catch (err) {
           showToast(`Failed to kill: ${err}`, 'error');
         }
       },
     });
-  };
+  }, [showToast]);
 
-  const handleDelete = (id: string) => {
+  const handleDelete = useCallback((id: string) => {
     setConfirmState({
       message: 'Delete this profile? This cannot be undone.',
       confirmLabel: 'Delete',
@@ -143,7 +151,7 @@ export const ProfileList: React.FC<ProfileListProps> = ({ onEditProfile, onClone
         }
       },
     });
-  };
+  }, [showToast]);
 
   if (loading) {
     return <div className="loading">Loading profiles...</div>;
