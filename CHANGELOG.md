@@ -2,6 +2,30 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.11.3] - 2026-03-22
+
+### Performance
+
+- **Large profile list rendering** — added viewport-based virtualization for dense profile lists so `Profiles` remains responsive with hundreds of entries.
+- **Reduced scroll update cost** — profile list windowing now updates by row instead of on every scroll pixel, cutting React work during fast scrolling.
+- **Lower rerender pressure** — preserved stable profile objects/status maps to avoid repainting unchanged cards during refresh and browser status polling.
+
+### UI Changes
+
+- **Profile cards redesigned** — cards are now denser and more compact, with better space usage, tighter metadata grouping, and a cleaner action bar.
+- **Improved information density** — tags, directory, timezone, proxy, and status now fit in a more readable compact layout.
+
+### Bug Fixes
+
+- **Settings CfT error banner** — opening `Settings` no longer triggers `Open zip: No such file or directory` when Chrome for Testing is selected but not yet downloaded.
+- **View switching stability** — `Profiles` and `Settings` stay mounted during tab switches, avoiding unnecessary reloads and preserving UI state.
+
+### Testing
+
+- Verified with `npm test`
+- Verified with `npm run build`
+- Verified with `cargo test --manifest-path src-tauri/Cargo.toml --offline --lib`
+
 ## [0.11.0] - 2026-03-16
 
 ### Major Changes

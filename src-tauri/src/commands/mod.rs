@@ -5,7 +5,7 @@ pub use snapshots::{create_snapshot, delete_snapshot, list_snapshots, restore_sn
 
 use crate::config::schema::BrowserSource;
 use crate::config::{validation, BrowserProfile};
-use crate::cft::{ensure_chrome_binary, fetch_versions, get_platform, CftProgress};
+use crate::cft::{ensure_chrome_binary, fetch_versions, find_chrome_in_dir, get_platform, CftProgress};
 use crate::state::AppState;
 use crate::window;
 use std::collections::HashMap;
@@ -67,11 +67,41 @@ async fn get_effective_chrome_path(state: &State<'_, Arc<AppState>>) -> Result<P
     get_effective_chrome_path_from_config(&config).await
 }
 
+fn get_existing_chrome_path_from_config(
+    config: &crate::config::AppConfig,
+) -> Result<Option<PathBuf>, String> {
+    if let Some(path) = &config.chrome_path {
+        validation::validate_chrome_path(path).map_err(|e| e.to_string())?;
+        return Ok(Some(path.clone()));
+    }
+
+    match &config.browser_source {
+        BrowserSource::Custom { path, .. } => {
+            validation::validate_chrome_path(path).map_err(|e| e.to_string())?;
+            Ok(Some(path.clone()))
+        }
+        BrowserSource::ChromeForTesting {
+            version,
+            download_dir,
+            ..
+        } => {
+            let Some(version) = version else {
+                return Ok(None);
+            };
+
+            Ok(find_chrome_in_dir(&download_dir.join(version)))
+        }
+    }
+}
+
 /// Get the current effective Chrome path (CfT binary or custom path).
 #[tauri::command]
 pub async fn get_chrome_path(state: State<'_, Arc<AppState>>) -> Result<String, String> {
-    let path = get_effective_chrome_path(&state).await?;
-    Ok(path.display().to_string())
+    let config = state.config.read().clone();
+    let path = get_existing_chrome_path_from_config(&config)?;
+    Ok(path
+        .map(|p| p.display().to_string())
+        .unwrap_or_default())
 }
 
 /// Launch a profile. Returns PID (cdp_port is stored internally).

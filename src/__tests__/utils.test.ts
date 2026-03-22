@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { formatBytes, profileMatchesFilter } from '../utils';
+import {
+  areProfilesEqual,
+  areRunningStatusesEqual,
+  formatBytes,
+  mergeProfilesById,
+  profileMatchesFilter,
+} from '../utils';
 
 describe('formatBytes', () => {
   it('should format bytes as B for values < 1024', () => {
@@ -74,5 +80,85 @@ describe('profileMatchesFilter', () => {
     };
     expect(profileMatchesFilter(profileWithEmptyTags, 'tagless')).toBe(true);
     expect(profileMatchesFilter(profileWithEmptyTags, 'work')).toBe(false);
+  });
+});
+
+describe('areRunningStatusesEqual', () => {
+  it('should return true for identical running maps', () => {
+    expect(areRunningStatusesEqual({ a: true, b: false }, { a: true, b: false })).toBe(true);
+  });
+
+  it('should return false when keys or values differ', () => {
+    expect(areRunningStatusesEqual({ a: true }, { a: false })).toBe(false);
+    expect(areRunningStatusesEqual({ a: true }, { a: true, b: false })).toBe(false);
+  });
+});
+
+describe('areProfilesEqual', () => {
+  const baseProfile = {
+    id: 'p1',
+    name: 'Profile 1',
+    description: '',
+    user_data_dir: '/tmp/p1',
+    lang: 'en-US',
+    custom_args: ['--foo'],
+    tags: ['work'],
+  };
+
+  it('should return true when profile fields are unchanged', () => {
+    expect(areProfilesEqual(baseProfile, { ...baseProfile })).toBe(true);
+  });
+
+  it('should return false when any profile field changes', () => {
+    expect(areProfilesEqual(baseProfile, { ...baseProfile, name: 'Updated' })).toBe(false);
+    expect(areProfilesEqual(baseProfile, { ...baseProfile, tags: ['work', 'test'] })).toBe(false);
+  });
+});
+
+describe('mergeProfilesById', () => {
+  const first = {
+    id: 'p1',
+    name: 'Profile 1',
+    description: '',
+    user_data_dir: '/tmp/p1',
+    lang: 'en-US',
+    custom_args: [],
+    tags: [],
+  };
+  const second = {
+    id: 'p2',
+    name: 'Profile 2',
+    description: '',
+    user_data_dir: '/tmp/p2',
+    lang: 'en-US',
+    custom_args: [],
+    tags: [],
+  };
+
+  it('should preserve object identity for unchanged profiles', () => {
+    const previous = [first, second];
+    const merged = mergeProfilesById(previous, [{ ...first }, { ...second }]);
+
+    expect(merged).toBe(previous);
+    expect(merged[0]).toBe(first);
+    expect(merged[1]).toBe(second);
+  });
+
+  it('should replace only the changed profile objects', () => {
+    const previous = [first, second];
+    const merged = mergeProfilesById(previous, [{ ...first, name: 'Updated' }, { ...second }]);
+
+    expect(merged).not.toBe(previous);
+    expect(merged[0]).not.toBe(first);
+    expect(merged[1]).toBe(second);
+  });
+
+  it('should return a new array when profile order changes', () => {
+    const previous = [first, second];
+    const merged = mergeProfilesById(previous, [{ ...second }, { ...first }]);
+
+    expect(merged).not.toBe(previous);
+    expect(merged[0]).toBe(second);
+    expect(merged[1]).toBe(first);
   });
 });

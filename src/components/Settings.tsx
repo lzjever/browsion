@@ -15,7 +15,7 @@ function formatBytes(n: number): string {
   return `${(n / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-export const Settings: React.FC = () => {
+export const Settings: React.FC = React.memo(() => {
   const [effectivePath, setEffectivePath] = useState<string>('');
   const [browserSource, setBrowserSource] = useState<BrowserSource | null>(null);
   const [cftVersions, setCftVersions] = useState<CftVersionInfo[]>([]);
@@ -699,4 +699,4 @@ export const Settings: React.FC = () => {
       </div>
     </div>
   );
-};
+});

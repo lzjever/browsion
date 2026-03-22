@@ -185,7 +185,7 @@ pub async fn ensure_chrome_binary(
     download_and_extract(&version_info.url, &version_dir, on_progress).await
 }
 
-fn find_chrome_in_dir(dir: &Path) -> Option<PathBuf> {
+pub fn find_chrome_in_dir(dir: &Path) -> Option<PathBuf> {
     if !dir.exists() {
         return None;
     }

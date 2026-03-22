@@ -65,7 +65,10 @@ function App() {
       </header>
 
       <main className="app-main">
-        {currentView === 'profiles' && (
+        <section
+          className={`view-panel ${currentView === 'profiles' ? '' : 'view-panel-hidden'}`}
+          aria-hidden={currentView !== 'profiles'}
+        >
           <div className="profiles-view">
             <div className="profiles-header">
               <h2>Browser Profiles</h2>
@@ -79,9 +82,14 @@ function App() {
               onCloneProfile={handleCloneProfile}
             />
           </div>
-        )}
+        </section>
 
-        {currentView === 'settings' && <Settings />}
+        <section
+          className={`view-panel ${currentView === 'settings' ? '' : 'view-panel-hidden'}`}
+          aria-hidden={currentView !== 'settings'}
+        >
+          <Settings />
+        </section>
       </main>
 
       {showProfileForm && (

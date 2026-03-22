@@ -5,4 +5,4 @@ mod api;
 mod download;
 
 pub use api::{fetch_versions, CftChannelApi, CftVersionInfo, LastKnownGoodVersions};
-pub use download::{ensure_chrome_binary, get_platform, CftProgress};
+pub use download::{ensure_chrome_binary, find_chrome_in_dir, get_platform, CftProgress};
